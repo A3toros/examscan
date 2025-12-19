@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="index, follow" />
+    <meta name="description" content="Free advanced answer sheet generation and OCR scanning for educators. Create, scan, and grade exams instantly with computer vision technology." />
+    <meta name="keywords" content="exam, test, grading, education, OCR, scanner, computer vision" />
+
+    <!-- Security Headers -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <meta http-equiv="X-Frame-Options" content="DENY" />
+    <meta http-equiv="X-XSS-Protection" content="1; mode=block" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="ExamScan - Smart Exam Grading" />
+    <meta property="og:description" content="Transform traditional exams with advanced computer vision technology for intelligent scanning and instant grading." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/vite.svg" />
+
+    <!-- CSRF Token -->
+    <meta name="csrf-token" content="" />
+
+    <title>ExamScan - Answer Sheet Scanner</title>
+    <script src="/opencv/opencv.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // OpenCV initialization
+      cv['onRuntimeInitialized'] = () => {
+        console.log('OpenCV ready for ExamScan');
+        // Dispatch custom event when OpenCV is ready
+        window.dispatchEvent(new CustomEvent('opencv-ready'));
+      };
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
