@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["functions/**/*"],
+  "compilerOptions": {
+    "types": ["node"],
+    "lib": ["ES2020"],
+    "moduleResolution": "node"
+  }
+}

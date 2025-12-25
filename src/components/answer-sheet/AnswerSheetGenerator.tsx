@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Trash2, Save, Download, Printer, Settings, ChevronDown, ChevronUp, Minus, Users } from 'lucide-react';
+import { Plus, Trash2, Save, Download, Printer, Settings, ChevronDown, ChevronUp, Minus } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Modal from '../ui/Modal';
-import LoadingSpinner from '../ui/LoadingSpinner';
 import jsPDF from 'jspdf';
 import { Document, Packer, Paragraph, TextRun, Table, TableCell, TableRow, WidthType } from 'docx';
 import { getCurrentToken } from '../../utils/auth';
@@ -20,6 +19,8 @@ interface StudentInfo {
   last_name: boolean;
   nickname: boolean;
   class: boolean;
+  student_id: boolean;
+  student_id_digits: number; // Number of digits in student ID (e.g., 6, 8, 10)
 }
 
 interface ExamForm {
@@ -40,7 +41,9 @@ function AnswerSheetGenerator() {
       name: true,
       last_name: true,
       nickname: false,
-      class: true
+      class: true,
+      student_id: false,
+      student_id_digits: 6
     }
   });
 
@@ -89,11 +92,8 @@ function AnswerSheetGenerator() {
       let currentQuestionNumber = 1;
       updatedStructure.forEach(section => {
         for (let i = 0; i < section.count; i++) {
-          const oldKey = Object.keys(updatedAnswerKey).find(key =>
-            parseInt(key) === currentQuestionNumber
-          );
-          if (oldKey && updatedAnswerKey[oldKey]) {
-            newAnswerKey[currentQuestionNumber] = updatedAnswerKey[oldKey];
+          if (updatedAnswerKey[currentQuestionNumber]) {
+            newAnswerKey[currentQuestionNumber] = updatedAnswerKey[currentQuestionNumber];
           }
           currentQuestionNumber++;
         }
@@ -131,7 +131,7 @@ function AnswerSheetGenerator() {
   };
 
   // Update student info fields
-  const updateStudentInfo = (field: keyof StudentInfo, value: boolean) => {
+  const updateStudentInfo = (field: keyof StudentInfo, value: boolean | number) => {
     setExam(prev => ({
       ...prev,
       studentInfo: {
@@ -211,7 +211,7 @@ function AnswerSheetGenerator() {
         return;
       }
 
-      const response = await fetch('/functions/exams.ts', {
+      const response = await fetch('/.netlify/functions/exams', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -241,7 +241,9 @@ function AnswerSheetGenerator() {
             name: true,
             last_name: true,
             nickname: false,
-            class: true
+            class: true,
+            student_id: false,
+            student_id_digits: 6
           }
         });
         setExpandedSections(new Set());
@@ -301,6 +303,39 @@ function AnswerSheetGenerator() {
           yPosition += 12;
         });
         yPosition += 15;
+      }
+
+      // Student ID Section
+      if (exam.studentInfo.student_id) {
+        pdf.setFontSize(12);
+        pdf.text('Student ID:', 20, yPosition);
+        yPosition += 15;
+
+        pdf.setFontSize(10);
+        pdf.text('Write your student ID number in the squares below:', 30, yPosition);
+        yPosition += 15;
+
+        // Draw student ID squares
+        const squareSize = 12;
+        const squaresPerRow = 10;
+        const squareSpacing = 2;
+        const startX = 30;
+
+        for (let i = 0; i < exam.studentInfo.student_id_digits; i++) {
+          const row = Math.floor(i / squaresPerRow);
+          const col = i % squaresPerRow;
+          const x = startX + (col * (squareSize + squareSpacing));
+          const y = yPosition + (row * (squareSize + squareSpacing + 5));
+
+          // Draw square
+          pdf.rect(x, y, squareSize, squareSize);
+
+          // Add number label below square
+          pdf.setFontSize(8);
+          pdf.text((i + 1).toString(), x + squareSize/2 - 1, y + squareSize + 4);
+        }
+
+        yPosition += Math.ceil(exam.studentInfo.student_id_digits / squaresPerRow) * (squareSize + squareSpacing + 10) + 15;
       }
       let questionNumber = 1;
 
@@ -467,6 +502,100 @@ function AnswerSheetGenerator() {
                 studentElements.push(new Paragraph({ children: [] })); // Empty line
               }
 
+              // Student ID Section
+              if (exam.studentInfo.student_id) {
+                studentElements.push(
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: 'Student ID:',
+                        bold: true,
+                        size: 26,
+                      }),
+                    ],
+                  })
+                );
+
+                studentElements.push(
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: 'Write your student ID number in the squares below:',
+                        size: 24,
+                      }),
+                    ],
+                  })
+                );
+
+                // Create student ID squares table
+                const squaresPerRow = 10;
+                const rows = Math.ceil(exam.studentInfo.student_id_digits / squaresPerRow);
+
+                for (let row = 0; row < rows; row++) {
+                  const cells = [];
+                  const squaresInThisRow = Math.min(squaresPerRow, exam.studentInfo.student_id_digits - (row * squaresPerRow));
+
+                  for (let col = 0; col < squaresInThisRow; col++) {
+                    const digitNumber = row * squaresPerRow + col + 1;
+                    cells.push(
+                      new TableCell({
+                        children: [
+                          new Paragraph({
+                            children: [
+                              new TextRun({
+                                text: '□',
+                                size: 32,
+                              }),
+                            ],
+                          }),
+                          new Paragraph({
+                            children: [
+                              new TextRun({
+                                text: digitNumber.toString(),
+                                size: 16,
+                              }),
+                            ],
+                          }),
+                        ],
+                        width: {
+                          size: 10,
+                          type: WidthType.PERCENTAGE,
+                        },
+                      })
+                    );
+                  }
+
+                  // Fill remaining cells if needed
+                  while (cells.length < squaresPerRow) {
+                    cells.push(
+                      new TableCell({
+                        children: [new Paragraph({ children: [] })],
+                        width: {
+                          size: 10,
+                          type: WidthType.PERCENTAGE,
+                        },
+                      })
+                    );
+                  }
+
+                  studentElements.push(
+                    new Table({
+                      width: {
+                        size: 100,
+                        type: WidthType.PERCENTAGE,
+                      },
+                      rows: [
+                        new TableRow({
+                          children: cells,
+                        }),
+                      ],
+                    })
+                  );
+                }
+
+                studentElements.push(new Paragraph({ children: [] })); // Empty line
+              }
+
               return studentElements;
             })(),
 
@@ -549,7 +678,7 @@ function AnswerSheetGenerator() {
 
       // Generate and download the Word document
       const buffer = await Packer.toBuffer(doc);
-      const blob = new Blob([buffer], {
+      const blob = new Blob([new Uint8Array(buffer)], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       });
 
@@ -734,43 +863,77 @@ function AnswerSheetGenerator() {
       <Card className="mb-8">
         <h2 className="text-xl font-semibold text-gray-800 mb-4">Student Information Header</h2>
         <p className="text-sm text-gray-600 mb-4">Select which student information fields to include at the top of the answer sheet:</p>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <label className="flex items-center">
-            <input
-              type="checkbox"
-              checked={exam.studentInfo.name}
-              onChange={(e) => updateStudentInfo('name', e.target.checked)}
-              className="mr-2"
-            />
-            Name
-          </label>
-          <label className="flex items-center">
-            <input
-              type="checkbox"
-              checked={exam.studentInfo.last_name}
-              onChange={(e) => updateStudentInfo('last_name', e.target.checked)}
-              className="mr-2"
-            />
-            Last Name
-          </label>
-          <label className="flex items-center">
-            <input
-              type="checkbox"
-              checked={exam.studentInfo.nickname}
-              onChange={(e) => updateStudentInfo('nickname', e.target.checked)}
-              className="mr-2"
-            />
-            Nickname
-          </label>
-          <label className="flex items-center">
-            <input
-              type="checkbox"
-              checked={exam.studentInfo.class}
-              onChange={(e) => updateStudentInfo('class', e.target.checked)}
-              className="mr-2"
-            />
-            Class
-          </label>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <label className="flex items-center">
+              <input
+                type="checkbox"
+                checked={exam.studentInfo.name}
+                onChange={(e) => updateStudentInfo('name', e.target.checked)}
+                className="mr-2"
+              />
+              Name
+            </label>
+            <label className="flex items-center">
+              <input
+                type="checkbox"
+                checked={exam.studentInfo.last_name}
+                onChange={(e) => updateStudentInfo('last_name', e.target.checked)}
+                className="mr-2"
+              />
+              Last Name
+            </label>
+            <label className="flex items-center">
+              <input
+                type="checkbox"
+                checked={exam.studentInfo.nickname}
+                onChange={(e) => updateStudentInfo('nickname', e.target.checked)}
+                className="mr-2"
+              />
+              Nickname
+            </label>
+            <label className="flex items-center">
+              <input
+                type="checkbox"
+                checked={exam.studentInfo.class}
+                onChange={(e) => updateStudentInfo('class', e.target.checked)}
+                className="mr-2"
+              />
+              Class
+            </label>
+          </div>
+
+          <div className="border-t pt-4">
+            <label className="flex items-center mb-3">
+              <input
+                type="checkbox"
+                checked={exam.studentInfo.student_id}
+                onChange={(e) => updateStudentInfo('student_id', e.target.checked)}
+                className="mr-2"
+              />
+              Student ID (Number Recognition)
+            </label>
+            {exam.studentInfo.student_id && (
+              <div className="ml-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Number of digits in Student ID:
+                </label>
+                <select
+                  value={exam.studentInfo.student_id_digits}
+                  onChange={(e) => updateStudentInfo('student_id_digits', parseInt(e.target.value))}
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value={4}>4 digits</option>
+                  <option value={5}>5 digits</option>
+                  <option value={6}>6 digits</option>
+                  <option value={7}>7 digits</option>
+                  <option value={8}>8 digits</option>
+                  <option value={9}>9 digits</option>
+                  <option value={10}>10 digits</option>
+                </select>
+              </div>
+            )}
+          </div>
         </div>
       </Card>
 
@@ -799,16 +962,16 @@ function AnswerSheetGenerator() {
       <Card className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold text-gray-800">
-            Questions ({exam.questions.length})
+            Questions ({getTotalQuestions()})
           </h2>
-          {exam.questions.length > 0 && (
+          {getTotalQuestions() > 0 && (
             <span className="text-sm text-gray-600">
-              {Object.keys(exam.answerKey).length}/{exam.questions.length} answered
+              {Object.keys(exam.answerKey).length}/{getTotalQuestions()} answered
             </span>
           )}
         </div>
 
-        {exam.questions.length === 0 ? (
+        {getTotalQuestions() === 0 ? (
           <div className="text-center py-12 text-gray-500">
             <Settings size={48} className="mx-auto mb-4 opacity-50" />
             <p className="text-lg mb-2">No questions added yet</p>

@@ -21,8 +21,15 @@ export interface BubbleDetectionResult {
   };
 }
 
+export interface NumberRecognitionResult {
+  square: { x: number; y: number; width: number; height: number };
+  digit: number | null;
+  confidence: number;
+}
+
 export interface OCRResult {
   detectedBubbles: BubbleDetectionResult[];
+  recognizedNumbers: NumberRecognitionResult[];
   processingTime: number;
   imageQuality: number;
   confidence: number;
@@ -93,6 +100,7 @@ class OCRService {
 
       return {
         detectedBubbles: bubbles,
+        recognizedNumbers: [], // TODO: Implement student ID recognition
         processingTime: Date.now() - startTime,
         imageQuality,
         confidence
@@ -100,6 +108,253 @@ class OCRService {
 
     } catch (error) {
       console.error('OCR processing failed:', error);
+      throw new Error(`OCR processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Recognize numbers in squares (for Student ID)
+   */
+  async recognizeNumbersInSquares(
+    imageData: ImageData,
+    expectedDigits: number
+  ): Promise<NumberRecognitionResult[]> {
+    const startTime = Date.now();
+    const cv = this.cv;
+
+    try {
+      // Convert ImageData to OpenCV Mat
+      const src = cv.matFromImageData(imageData);
+      const gray = new cv.Mat();
+      const processed = new cv.Mat();
+
+      // Convert to grayscale
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+      // Apply preprocessing for better square detection
+      cv.GaussianBlur(gray, processed, new cv.Size(3, 3), 0);
+      cv.adaptiveThreshold(processed, processed, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+
+      // Find contours
+      const contours = new cv.MatVector();
+      const hierarchy = new cv.Mat();
+      cv.findContours(processed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      const squares: any[] = [];
+
+      // Filter contours to find squares
+      for (let i = 0; i < contours.size(); i++) {
+        const contour = contours.get(i);
+        const area = cv.contourArea(contour);
+
+        // Filter by area (reasonable square size)
+        if (area < 100 || area > 10000) continue;
+
+        // Get bounding rectangle
+        const rect = cv.boundingRect(contour);
+        const aspectRatio = rect.width / rect.height;
+
+        // Check if it's roughly square (aspect ratio between 0.8 and 1.2)
+        if (aspectRatio >= 0.8 && aspectRatio <= 1.2) {
+          squares.push(rect);
+        }
+      }
+
+      // Sort squares by x-coordinate (left to right)
+      squares.sort((a, b) => a.x - b.x);
+
+      // Limit to expected number of digits
+      const selectedSquares = squares.slice(0, expectedDigits);
+
+      const results: NumberRecognitionResult[] = [];
+
+      // Recognize digits in each square
+      for (const square of selectedSquares) {
+        const digit = await this.recognizeDigitInSquare(gray, square);
+        results.push({
+          square: {
+            x: square.x,
+            y: square.y,
+            width: square.width,
+            height: square.height
+          },
+          digit: digit.digit,
+          confidence: digit.confidence
+        });
+      }
+
+      // Cleanup
+      src.delete();
+      gray.delete();
+      processed.delete();
+      contours.delete();
+      hierarchy.delete();
+
+      return results;
+
+    } catch (error) {
+      console.error('Number recognition failed:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Recognize a single digit in a square
+   */
+  private async recognizeDigitInSquare(
+    image: any,
+    square: any
+  ): Promise<{ digit: number | null; confidence: number }> {
+    const cv = this.cv;
+
+    try {
+      // Extract the square region
+      const roi = image.roi(square);
+
+      // Resize to standard size for recognition (28x28 for MNIST-like models)
+      const resized = new cv.Mat();
+      cv.resize(roi, resized, new cv.Size(28, 28), 0, 0, cv.INTER_LINEAR);
+
+      // Apply threshold to get binary image
+      const binary = new cv.Mat();
+      cv.threshold(resized, binary, 127, 255, cv.THRESH_BINARY_INV);
+
+      // Simple digit recognition using pixel density analysis
+      // This is a basic implementation - in production, use a trained ML model
+      const digit = this.recognizeDigitByFeatures(binary);
+
+      // Calculate confidence based on how well the pattern matches expected digit shapes
+      const confidence = this.calculateDigitConfidence(binary, digit);
+
+      // Cleanup
+      roi.delete();
+      resized.delete();
+      binary.delete();
+
+      return { digit, confidence };
+
+    } catch (error) {
+      console.error('Digit recognition error:', error);
+      return { digit: null, confidence: 0 };
+    }
+  }
+
+  /**
+   * Simple digit recognition using basic feature analysis
+   * In production, replace with trained ML model
+   */
+  private recognizeDigitByFeatures(binaryImage: any): number | null {
+    // This is a very basic implementation
+    // Count pixels in different regions to identify digit patterns
+
+    const width = binaryImage.cols;
+    const height = binaryImage.rows;
+
+    // Divide into 3x3 grid
+    const regions = [
+      [0, 0, width/3, height/3],       // top-left
+      [width/3, 0, width/3, height/3], // top-center
+      [2*width/3, 0, width/3, height/3], // top-right
+      [0, height/3, width/3, height/3], // middle-left
+      [width/3, height/3, width/3, height/3], // center
+      [2*width/3, height/3, width/3, height/3], // middle-right
+      [0, 2*height/3, width/3, height/3], // bottom-left
+      [width/3, 2*height/3, width/3, height/3], // bottom-center
+      [2*width/3, 2*height/3, width/3, height/3], // bottom-right
+    ];
+
+    const regionCounts = regions.map(([x, y, w, h]) => {
+      let count = 0;
+      for (let i = Math.floor(y); i < Math.floor(y + h); i++) {
+        for (let j = Math.floor(x); j < Math.floor(x + w); j++) {
+          if (binaryImage.ucharPtr(i, j)[0] > 127) {
+            count++;
+          }
+        }
+      }
+      return count / (w * h); // Normalize by region size
+    });
+
+    // Simple pattern matching for digits 0-9
+    // This is a very basic implementation - use ML model for production
+    const [tl, tc, tr, ml, c, mr, bl, bc, br] = regionCounts;
+
+    // Basic digit recognition logic
+    if (tl > 0.3 && tr > 0.3 && bl > 0.3 && br > 0.3 && ml > 0.3 && mr > 0.3 && c < 0.2) return 0;
+    if (tr > 0.3 && mr > 0.3 && br > 0.3) return 1;
+    if (tl > 0.3 && tc > 0.3 && tr > 0.3 && ml < 0.2 && mr > 0.3 && bl > 0.3) return 2;
+    if (tl > 0.3 && tc > 0.3 && tr > 0.3 && mr > 0.3 && br > 0.3 && bl > 0.3) return 3;
+    if (ml > 0.3 && tc > 0.3 && tr > 0.3 && mr > 0.3) return 4;
+    if (tl > 0.3 && ml > 0.3 && tc > 0.3 && tr > 0.3 && mr > 0.3 && br > 0.3) return 5;
+    if (tl > 0.3 && ml > 0.3 && c > 0.3 && mr > 0.3 && br > 0.3) return 6;
+    if (tl > 0.3 && tc > 0.3 && tr > 0.3 && mr > 0.3) return 7;
+    if (tl > 0.3 && tc > 0.3 && tr > 0.3 && ml > 0.3 && c > 0.3 && mr > 0.3 && bl > 0.3 && bc > 0.3 && br > 0.3) return 8;
+    if (tl > 0.3 && tc > 0.3 && tr > 0.3 && ml > 0.3 && c > 0.3 && mr > 0.3 && br > 0.3) return 9;
+
+    return null; // Unrecognized
+  }
+
+  /**
+   * Calculate confidence in digit recognition
+   */
+  private calculateDigitConfidence(binaryImage: any, digit: number | null): number {
+    if (digit === null) return 0;
+
+    // Simple confidence calculation based on image clarity
+    // In production, use model confidence scores
+    const totalPixels = binaryImage.rows * binaryImage.cols;
+    let filledPixels = 0;
+
+    for (let y = 0; y < binaryImage.rows; y++) {
+      for (let x = 0; x < binaryImage.cols; x++) {
+        if (binaryImage.ucharPtr(y, x)[0] > 127) {
+          filledPixels++;
+        }
+      }
+    }
+
+    const fillRatio = filledPixels / totalPixels;
+
+    // Good digits typically have 20-80% fill ratio
+    if (fillRatio >= 0.2 && fillRatio <= 0.8) {
+      return Math.min(fillRatio * 2, 1); // Scale to 0-1
+    }
+
+    return 0.1; // Low confidence for unusual fill ratios
+  }
+
+  /**
+   * Process answer sheet with student ID recognition
+   */
+  async processAnswerSheetWithStudentID(
+    imageData: ImageData | HTMLImageElement | string,
+    questionTypes: { questionNumber: number; type: 'mc' | 'tf' }[],
+    studentIdDigits: number
+  ): Promise<OCRResult> {
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+
+    const startTime = Date.now();
+
+    try {
+      // Get regular OCR results
+      const ocrResult = await this.processAnswerSheet(imageData, questionTypes);
+
+      // Recognize student ID numbers
+      const recognizedNumbers = await this.recognizeNumbersInSquares(
+        imageData as ImageData,
+        studentIdDigits
+      );
+
+      return {
+        ...ocrResult,
+        recognizedNumbers,
+        processingTime: Date.now() - startTime
+      };
+
+    } catch (error) {
+      console.error('OCR processing with student ID failed:', error);
       throw new Error(`OCR processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }

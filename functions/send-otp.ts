@@ -1,9 +1,5 @@
 import { Resend } from 'resend';
-
-interface Env {
-  RESEND_API_KEY: string;
-  FROM_EMAIL: string;
-}
+import { neon } from '@neondatabase/serverless';
 
 interface OTPEmailData {
   to: string;
@@ -11,10 +7,62 @@ interface OTPEmailData {
   type: 'email_verification' | 'password_reset' | 'login_2fa';
 }
 
-export async function onRequestPost({ request, env }: { request: Request; env: Env }) {
+import { NetlifyEvent } from './types.js';
+
+export async function handler(event: NetlifyEvent) {
+  // Only allow POST requests
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS'
+      },
+      body: JSON.stringify({ error: 'Method not allowed' })
+    };
+  }
+
+  // Handle CORS preflight requests
+  if (event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS'
+      },
+      body: ''
+    };
+  }
+
   try {
-    const data: OTPEmailData = await request.json();
-    const resend = new Resend(env.RESEND_API_KEY);
+    const data: OTPEmailData = JSON.parse(event.body || '{}');
+
+    if (!process.env.RESEND_API_KEY || !process.env.FROM_EMAIL || !process.env.NEON_DATABASE_URL) {
+      throw new Error('Missing required environment variables');
+    }
+
+    // Store OTP in database for verification (except for password reset which might not need storage)
+    if (data.type === 'email_verification' || data.type === 'login_2fa') {
+      const sql = neon(process.env.NEON_DATABASE_URL);
+      const otpType = data.type === 'email_verification' ? 'registration' : 'login';
+
+      // First, mark any existing unused OTPs for this email/type as used
+      await sql`
+        UPDATE otps
+        SET is_used = true
+        WHERE email = ${data.to} AND otp_type = ${otpType} AND is_used = false
+      `;
+
+      // Insert new OTP
+      await sql`
+        INSERT INTO otps (email, otp_code, otp_type, expires_at)
+        VALUES (${data.to}, ${data.otp}, ${otpType}, CURRENT_TIMESTAMP + INTERVAL '10 minutes')
+      `;
+    }
+
+    const resend = new Resend(process.env.RESEND_API_KEY);
 
     let subject: string;
     let htmlContent: string;
@@ -90,30 +138,41 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
     }
 
     const result = await resend.emails.send({
-      from: env.FROM_EMAIL,
+      from: process.env.FROM_EMAIL!,
       to: data.to,
       subject,
       html: htmlContent,
     });
 
-    return new Response(JSON.stringify({
-      success: true,
-      emailId: result.data?.id,
-      message: 'OTP email sent successfully'
-    }), {
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        success: true,
+        emailId: result.data?.id,
+        message: 'OTP email sent successfully'
+      })
+    };
 
   } catch (error) {
     console.error('Error sending OTP email:', error);
 
-    return new Response(JSON.stringify({
-      success: false,
-      error: 'Failed to send OTP email',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return {
+      statusCode: 500,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        success: false,
+        error: 'Failed to send OTP email',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      })
+    };
   }
 }

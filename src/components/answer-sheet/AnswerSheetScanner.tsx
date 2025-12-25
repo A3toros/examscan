@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Camera, Upload, Zap, CheckCircle, AlertCircle, RefreshCw, Eye } from 'lucide-react';
+import { Camera, Upload, Zap, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Modal from '../ui/Modal';
 import LoadingSpinner from '../ui/LoadingSpinner';
-import ocrService, { OCRResult, BubbleDetectionResult } from '../../services/ocrService';
+import ocrService, { OCRResult } from '../../services/ocrService';
+import { getCurrentToken } from '../../utils/auth';
 
 interface Exam {
   id: number;
@@ -13,6 +14,10 @@ interface Exam {
   total_questions: number;
   question_types: { question_number: number; type: 'mc' | 'tf' }[];
   answer_key: Record<number, string>;
+  student_info?: {
+    student_id?: boolean;
+    student_id_digits?: number;
+  };
 }
 
 interface ScanResult {
@@ -22,52 +27,72 @@ interface ScanResult {
   score: number;
   totalQuestions: number;
   confidence: number;
+  studentId?: string;
+  recognizedNumbers?: Array<{ digit: number | null; confidence: number }>;
   processingTime: number;
   imageQuality: number;
 }
 
 function AnswerSheetScanner() {
   const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
+  const [exams, setExams] = useState<Exam[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [showResultModal, setShowResultModal] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Mock exam data - in real app, this would come from API
-  const [exams] = useState<Exam[]>([
-    {
-      id: 1,
-      name: 'Math Midterm - Algebra',
-      total_questions: 20,
-      question_types: Array.from({ length: 20 }, (_, i) => ({
-        question_number: i + 1,
-        type: i % 3 === 0 ? 'tf' : 'mc' // Mix of MC and TF
-      })),
-      answer_key: {
-        1: 'A', 2: 'B', 3: 'T', 4: 'C', 5: 'F', 6: 'A', 7: 'B', 8: 'T',
-        9: 'C', 10: 'D', 11: 'F', 12: 'A', 13: 'B', 14: 'T', 15: 'C',
-        16: 'D', 17: 'F', 18: 'A', 19: 'B', 20: 'T'
+  // Load exams from API
+  useEffect(() => {
+    loadExams();
+  }, []);
+
+  const loadExams = async () => {
+    try {
+      const token = getCurrentToken();
+      if (!token) {
+        alert('Please log in first');
+        return;
       }
-    },
-    {
-      id: 2,
-      name: 'Science Quiz - Biology',
-      total_questions: 15,
-      question_types: Array.from({ length: 15 }, (_, i) => ({
-        question_number: i + 1,
-        type: 'mc' // All multiple choice
-      })),
-      answer_key: {
-        1: 'A', 2: 'B', 3: 'C', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'D',
-        9: 'A', 10: 'B', 11: 'C', 12: 'D', 13: 'A', 14: 'B', 15: 'C'
+
+      const response = await fetch('/.netlify/functions/exams', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Transform API data to component format
+        const transformedExams = data.exams?.map((exam: any) => ({
+          id: exam.id,
+          name: exam.exam_name,
+          total_questions: exam.questions?.length || exam.total_questions || 0,
+          question_types: exam.questions?.map((q: any, index: number) => ({
+            question_number: index + 1,
+            type: q.type === 'mc' ? 'mc' : 'tf'
+          })) || [],
+          answer_key: exam.answer_key || {},
+          student_info: exam.student_info || undefined
+        })) || [];
+
+        setExams(transformedExams);
+      } else {
+        console.error('Failed to load exams');
+        alert('Failed to load exams. Please check your connection and try again.');
       }
+    } catch (error) {
+      console.error('Error loading exams:', error);
+      alert('Error loading exams. Please try again.');
+    } finally {
+      setLoading(false);
     }
-  ]);
+  };
 
   // Initialize OpenCV on component mount
   useEffect(() => {
@@ -143,6 +168,24 @@ function AnswerSheetScanner() {
         }
       });
 
+      // Extract student ID if enabled
+      let studentId: string | undefined;
+      let recognizedNumbers: Array<{ digit: number | null; confidence: number }> | undefined;
+
+      if (selectedExam.student_info?.student_id && ocrResult.recognizedNumbers) {
+        recognizedNumbers = ocrResult.recognizedNumbers.map(num => ({
+          digit: num.digit,
+          confidence: num.confidence
+        }));
+
+        // Build student ID string from recognized digits
+        const digits = ocrResult.recognizedNumbers
+          .filter(num => num.digit !== null)
+          .map(num => num.digit!.toString());
+
+        studentId = digits.length > 0 ? digits.join('') : undefined;
+      }
+
       const result: ScanResult = {
         examId: selectedExam.id,
         examName: selectedExam.name,
@@ -151,7 +194,9 @@ function AnswerSheetScanner() {
         totalQuestions: selectedExam.total_questions,
         confidence: ocrResult.confidence,
         processingTime: ocrResult.processingTime,
-        imageQuality: ocrResult.imageQuality
+        imageQuality: ocrResult.imageQuality,
+        studentId,
+        recognizedNumbers
       };
 
       setScanResult(result);
@@ -176,7 +221,15 @@ function AnswerSheetScanner() {
 
     try {
       const imageData = await fileToImageData(file);
-      const ocrResult = await ocrService.processAnswerSheet(imageData, selectedExam.question_types);
+
+      // Use appropriate OCR method based on student ID settings
+      const ocrResult = selectedExam.student_info?.student_id
+        ? await ocrService.processAnswerSheetWithStudentID(
+            imageData,
+            selectedExam.question_types,
+            selectedExam.student_info.student_id_digits || 6
+          )
+        : await ocrService.processAnswerSheet(imageData, selectedExam.question_types);
 
       // Calculate score
       const studentAnswers: Record<number, string> = {};
@@ -236,12 +289,6 @@ function AnswerSheetScanner() {
     return 'text-red-600';
   };
 
-  const getConfidenceLabel = (confidence: number) => {
-    if (confidence >= 0.8) return 'High Confidence';
-    if (confidence >= 0.6) return 'Medium Confidence';
-    return 'Low Confidence';
-  };
-
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
       {/* Header */}
@@ -254,7 +301,12 @@ function AnswerSheetScanner() {
       <Card className="mb-8">
         <h2 className="text-xl font-semibold text-gray-800 mb-4">Select Exam to Grade</h2>
 
-        {exams.length === 0 ? (
+        {loading ? (
+          <div className="text-center py-8">
+            <LoadingSpinner />
+            <p className="text-gray-500 mt-2">Loading exams...</p>
+          </div>
+        ) : exams.length === 0 ? (
           <div className="text-center py-8 text-gray-500">
             <p>No exams available. Create an exam first to start scanning.</p>
           </div>
@@ -277,6 +329,11 @@ function AnswerSheetScanner() {
                     {exam.question_types.filter(q => q.type === 'mc').length} Multiple Choice, {' '}
                     {exam.question_types.filter(q => q.type === 'tf').length} True/False
                   </p>
+                  {exam.student_info?.student_id && (
+                    <p className="text-blue-600 font-medium">
+                      📝 Student ID: {exam.student_info.student_id_digits} digits
+                    </p>
+                  )}
                 </div>
                 {selectedExam?.id === exam.id && (
                   <CheckCircle className="text-blue-500 mt-2" size={20} />
@@ -435,6 +492,37 @@ function AnswerSheetScanner() {
                 <p className="text-sm text-purple-700">AI Confidence</p>
               </div>
             </div>
+
+            {/* Student ID */}
+            {scanResult.studentId && (
+              <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                <h3 className="text-lg font-semibold text-yellow-800 mb-2">Student ID Detected</h3>
+                <div className="text-2xl font-mono font-bold text-yellow-900 bg-white px-3 py-2 rounded border inline-block">
+                  {scanResult.studentId}
+                </div>
+                {scanResult.recognizedNumbers && (
+                  <div className="mt-3">
+                    <p className="text-sm text-yellow-700 mb-1">Digit Recognition Details:</p>
+                    <div className="flex space-x-2">
+                      {scanResult.recognizedNumbers.map((num, index) => (
+                        <div key={index} className="text-center">
+                          <div className={`w-8 h-8 rounded border-2 flex items-center justify-center font-bold text-sm ${
+                            num.digit !== null
+                              ? 'bg-green-100 border-green-400 text-green-800'
+                              : 'bg-red-100 border-red-400 text-red-800'
+                          }`}>
+                            {num.digit !== null ? num.digit : '?'}
+                          </div>
+                          <div className="text-xs text-yellow-600 mt-1">
+                            {Math.round(num.confidence * 100)}%
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Processing Details */}
             <div className="grid grid-cols-2 gap-4 text-sm">

@@ -155,25 +155,10 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ============================================
--- INITIAL TEST DATA
+-- NO TEST DATA INCLUDED
 -- ============================================
--- Test user
-INSERT INTO users (username, email, first_name, last_name)
-VALUES ('testuser', 'test@example.com', 'Test', 'User')
-ON CONFLICT (username) DO NOTHING;
-
--- Test exam
-INSERT INTO exams (user_id, title, description, total_questions, test_structure, answer_key)
-SELECT
-    u.id,
-    'Sample Math Quiz',
-    'Basic algebra questions',
-    5,
-    '[{"type": "mc", "count": 2}, {"type": "tf", "count": 2}, {"type": "mc", "count": 1}]'::jsonb,
-    '{"1": "A", "2": "B", "3": "T", "4": "F", "5": "C"}'::jsonb
-FROM users u
-WHERE u.username = 'testuser'
-ON CONFLICT DO NOTHING;
+-- Production database should start empty
+-- Users and exams will be created through the application
 
 -- ============================================
 -- COMMENTS

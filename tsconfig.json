@@ -5,7 +5,7 @@
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
-    "types": ["@cloudflare/workers-types"],
+    "types": ["node", "@cloudflare/workers-types"],
 
     /* Bundler mode */
     "moduleResolution": "bundler",
@@ -21,6 +21,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "functions"],
+  "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

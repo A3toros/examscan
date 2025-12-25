@@ -1,10 +1,32 @@
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-interface Env {
-  // Environment variables for logout functionality
-}
+import { NetlifyEvent } from './types.js';
 
-// eslint-disable-next-line no-unused-vars, @typescript-eslint/no-unused-vars
-export async function onRequestPost({ request }: { request: Request }) {
+export async function handler(event: NetlifyEvent) {
+  // Only allow POST requests
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS'
+      },
+      body: JSON.stringify({ error: 'Method not allowed' })
+    };
+  }
+
+  // Handle CORS preflight requests
+  if (event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS'
+      },
+      body: ''
+    };
+  }
+
   try {
     // In a more sophisticated system, you might:
     // 1. Add the token to a blacklist
@@ -14,22 +36,34 @@ export async function onRequestPost({ request }: { request: Request }) {
     // For now, since we're using stateless JWT, we just return success
     // The client should remove the token from localStorage/sessionStorage
 
-    return new Response(JSON.stringify({
-      success: true,
-      message: 'Logged out successfully'
-    }), {
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        success: true,
+        message: 'Logged out successfully'
+      })
+    };
 
   } catch (error) {
     console.error('Logout error:', error);
-    return new Response(JSON.stringify({
-      success: false,
-      error: 'Logout failed',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
+
+    return {
+      statusCode: 500,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        success: false,
+        error: 'Logout failed',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      })
+    };
   }
 }

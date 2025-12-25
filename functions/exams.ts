@@ -1,44 +1,5 @@
 import { neon } from '@neondatabase/serverless';
-
-interface Env {
-  NEON_DATABASE_URL: string;
-  JWT_SECRET: string;
-}
-
-export async function onRequestGet({ request, env }: { request: Request; env: Env }) {
-  try {
-    // Get teacher ID from JWT token (implement token verification)
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-
-    const token = authHeader.substring(7);
-    const teacherId = await verifyToken(token, env);
-
-    // Fetch from Neon
-    const sql = neon(env.NEON_DATABASE_URL);
-    const exams = await sql`
-      SELECT * FROM exams
-      WHERE user_id = ${teacherId}
-      ORDER BY created_at DESC
-    `;
-
-    return new Response(JSON.stringify({ exams: exams || [] }), {
-      headers: { 'Content-Type': 'application/json' }
-    });
-
-  } catch (error) {
-    console.error('Error fetching exams:', error);
-    return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-}
+import jwt from 'jsonwebtoken';
 
 interface Question {
   id: string;
@@ -52,96 +13,172 @@ interface ExamData {
   description: string;
   testStructure: { type: string; count: number }[];
   answerKey: Record<number, string>;
-  studentInfo?: { name: boolean; last_name: boolean; nickname: boolean; class: boolean };
+  studentInfo?: {
+    name: boolean;
+    last_name: boolean;
+    nickname: boolean;
+    class: boolean;
+    student_id?: boolean;
+    student_id_digits?: number;
+  };
 }
 
-export async function onRequestPost({ request, env }: { request: Request; env: Env }) {
+import { NetlifyEvent } from './types.js';
+
+export async function handler(event: NetlifyEvent) {
+  // Handle CORS preflight requests
+  if (event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS'
+      },
+      body: ''
+    };
+  }
+
   try {
-    const authHeader = request.headers.get('Authorization');
+    // Get teacher ID from JWT token
+    const authHeader = event.headers.authorization || event.headers.Authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return {
+        statusCode: 401,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ error: 'Unauthorized' })
+      };
+    }
+
+    if (!process.env.NEON_DATABASE_URL || !process.env.JWT_SECRET) {
+      throw new Error('Missing required environment variables');
     }
 
     const token = authHeader.substring(7);
-    const teacherId = await verifyToken(token, env);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
+    const teacherId = decoded.user_id;
 
-    const examData: ExamData = await request.json();
+    const sql = neon(process.env.NEON_DATABASE_URL);
 
-    // Calculate total questions from test structure
-    const totalQuestions = examData.testStructure.reduce((total, section) => total + section.count, 0);
+    if (event.httpMethod === 'GET') {
+      // Fetch exams
+      const exams = await sql`
+        SELECT
+          id,
+          title as exam_name,
+          description,
+          total_questions,
+          test_structure as questions,
+          created_at,
+          status,
+          (SELECT COUNT(*) FROM answers WHERE answers.exam_id = exams.id) as total_scans
+        FROM exams
+        WHERE user_id = ${teacherId}
+        ORDER BY created_at DESC
+      `;
 
-    // Insert into Neon
-    const sql = neon(env.NEON_DATABASE_URL);
-    const [exam] = await sql`
-      INSERT INTO exams (
-        user_id,
-        title,
-        description,
-        total_questions,
-        test_structure,
-        answer_key,
-        student_info
-      ) VALUES (
-        ${teacherId},
-        ${examData.name},
-        ${examData.description},
-        ${totalQuestions},
-        ${JSON.stringify(examData.testStructure)},
-        ${JSON.stringify(examData.answerKey)},
-        ${JSON.stringify(examData.studentInfo || { name: true, last_name: true, nickname: false, class: true })}
-      )
-      RETURNING *
-    `;
+      return {
+        statusCode: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ exams: exams || [] })
+      };
 
-    return new Response(JSON.stringify({ exam }), {
-      headers: { 'Content-Type': 'application/json' }
-    });
+    } else if (event.httpMethod === 'POST') {
+      // Create new exam
+      const examData: ExamData = JSON.parse(event.body || '{}');
+
+      // Calculate total questions from test structure
+      const totalQuestions = examData.testStructure.reduce((total, section) => total + section.count, 0);
+
+      // Insert into Neon
+      const [exam] = await sql`
+        INSERT INTO exams (
+          user_id,
+          title,
+          description,
+          total_questions,
+          test_structure,
+          answer_key,
+          student_info
+        ) VALUES (
+          ${teacherId},
+          ${examData.name},
+          ${examData.description},
+          ${totalQuestions},
+          ${JSON.stringify(examData.testStructure)},
+          ${JSON.stringify(examData.answerKey)},
+          ${examData.studentInfo ? JSON.stringify(examData.studentInfo) : null}
+        )
+        RETURNING *
+      `;
+
+      return {
+        statusCode: 201,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          success: true,
+          exam: {
+            id: exam.id,
+            exam_name: exam.title,
+            description: exam.description,
+            questions: JSON.parse(exam.test_structure || '[]'),
+            created_at: exam.created_at,
+            status: exam.status || 'draft',
+            total_scans: 0
+          }
+        })
+      };
+
+    } else {
+      return {
+        statusCode: 405,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ error: 'Method not allowed' })
+      };
+    }
 
   } catch (error) {
-    console.error('Error creating exam:', error);
-    return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-}
+    console.error('Error in exams function:', error);
 
-// Helper function to verify JWT token
-async function verifyToken(token: string, env: Env): Promise<string> {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) {
-      throw new Error('Invalid token format');
+    if (error instanceof jwt.JsonWebTokenError) {
+      return {
+        statusCode: 401,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ error: 'Invalid token' })
+      };
     }
 
-    const [headerB64, payloadB64, signatureB64] = parts;
-
-    // Decode payload
-    const payload = JSON.parse(atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/')));
-
-    // Check expiration
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
-      throw new Error('Token expired');
-    }
-
-    // Verify signature (simple implementation)
-    const message = `${headerB64}.${payloadB64}`;
-    const hashBuffer = await crypto.subtle.digest('SHA-256',
-      new TextEncoder().encode(message + env.JWT_SECRET)
-    );
-    const hashArray = new Uint8Array(hashBuffer);
-    const expectedSignature = btoa(String.fromCharCode.apply(null, Array.from(hashArray)))
-      .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-
-    if (signatureB64 !== expectedSignature) {
-      throw new Error('Invalid token signature');
-    }
-
-    return payload.user_id;
-  } catch {
-    throw new Error('Token verification failed');
+    return {
+      statusCode: 500,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        error: 'Internal Server Error',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      })
+    };
   }
 }

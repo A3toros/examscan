@@ -8,29 +8,26 @@ import Modal from './ui/Modal';
 import LoadingSpinner from './ui/LoadingSpinner';
 
 const Registration: React.FC = () => {
-  const [step, setStep] = useState<'form' | 'otp' | 'success'>('form');
+  const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
+    username: '',
     email: '',
     school: '',
     password: '',
     confirmPassword: ''
   });
-  const [otpCode, setOtpCode] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [resendTimer, setResendTimer] = useState(0);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSendOTP = async (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
 
     // Basic validation
-    if (!formData.name || !formData.email || !formData.school || !formData.password) {
+    if (!formData.name || !formData.username || !formData.email || !formData.school || !formData.password) {
       alert('Please fill in all required fields');
       return;
     }
@@ -40,89 +37,48 @@ const Registration: React.FC = () => {
       return;
     }
 
-    if (formData.password.length < 8) {
-      alert('Password must be at least 8 characters long');
+    if (formData.password.length < 6) {
+      alert('Password must be at least 6 characters long');
+      return;
+    }
+
+    if (formData.username.length < 3) {
+      alert('Username must be at least 3 characters long');
       return;
     }
 
     setIsLoading(true);
 
     try {
-      // Call API to send OTP
-      const response = await fetch('/api/send-otp', {
+      // Call API to register user
+      const response = await fetch('/.netlify/functions/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          name: formData.name,
+          username: formData.username,
           email: formData.email,
-          type: 'email_verification'
+          school: formData.school,
+          password: formData.password
         })
       });
 
       const result = await response.json();
 
       if (result.success) {
-        setOtpSent(true);
-        setStep('otp');
-        setResendTimer(60); // 60 second countdown
-
-        // Start countdown timer
-        const timer = setInterval(() => {
-          setResendTimer(prev => {
-            if (prev <= 1) {
-              clearInterval(timer);
-              return 0;
-            }
-            return prev - 1;
-          });
-        }, 1000);
+        alert('Registration successful! You can now log in.');
+        window.location.href = '/login';
       } else {
-        alert(result.error || 'Failed to send OTP');
+        alert(result.error || 'Registration failed. Please try again.');
       }
     } catch (error) {
-      console.error('Error sending OTP:', error);
-      alert('Failed to send verification code. Please try again.');
+      console.error('Registration error:', error);
+      alert('Registration failed. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleVerifyOTP = async () => {
-    if (!otpCode || otpCode.length !== 6) {
-      alert('Please enter a valid 6-digit code');
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      // Call API to verify OTP and complete registration
-      const response = await fetch('/api/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...formData,
-          otpCode
-        })
-      });
-
-      const result = await response.json();
-
-      if (result.success) {
-        setStep('success');
-        // Redirect after showing success message
-        setTimeout(() => {
-          window.location.href = '/dashboard';
-        }, 3000);
-      } else {
-        alert(result.error || 'Registration failed');
-      }
-    } catch (error) {
-      console.error('Error verifying OTP:', error);
-      alert('Verification failed. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const handleResendOTP = async () => {
     if (resendTimer > 0) return;
@@ -181,8 +137,7 @@ const Registration: React.FC = () => {
             <p className="text-gray-600">Create your teacher account to get started</p>
           </div>
 
-          {step === 'form' && (
-            <form onSubmit={handleSendOTP} className="space-y-6">
+          <form onSubmit={handleRegister} className="space-y-6">
               <div>
                 <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
                   Full Name
@@ -197,6 +152,25 @@ const Registration: React.FC = () => {
                     onChange={handleInputChange}
                     className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     placeholder="Enter your full name"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-2">
+                  Username
+                </label>
+                <div className="relative">
+                  <User className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                  <input
+                    type="text"
+                    id="username"
+                    name="username"
+                    value={formData.username}
+                    onChange={handleInputChange}
+                    className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="Choose a username"
                     required
                   />
                 </div>
@@ -284,73 +258,9 @@ const Registration: React.FC = () => {
                 size="lg"
                 isLoading={isLoading}
               >
-                {isLoading ? 'Sending Code...' : 'Send Verification Code'}
+                {isLoading ? 'Creating Account...' : 'Create Account'}
               </Button>
             </form>
-          )}
-
-          {step === 'otp' && (
-            <div className="space-y-6">
-              <div className="text-center">
-                <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-                <h3 className="text-lg font-semibold text-gray-800 mb-2">Check your email!</h3>
-                <p className="text-gray-600 mb-4">
-                  We've sent a 6-digit verification code to <strong>{formData.email}</strong>
-                </p>
-              </div>
-
-              <div>
-                <label htmlFor="otp" className="block text-sm font-medium text-gray-700 mb-2 text-center">
-                  Enter Verification Code
-                </label>
-                <input
-                  type="text"
-                  id="otp"
-                  value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  className="w-full text-center text-2xl font-mono tracking-widest py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="000000"
-                  maxLength={6}
-                />
-                <p className="text-xs text-gray-500 text-center mt-2">
-                  Code expires in 10 minutes
-                </p>
-              </div>
-
-              <Button
-                onClick={handleVerifyOTP}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white"
-                size="lg"
-                isLoading={isLoading}
-                disabled={otpCode.length !== 6}
-              >
-                {isLoading ? 'Verifying...' : 'Verify & Complete Registration'}
-              </Button>
-
-              <div className="text-center">
-                <button
-                  onClick={handleResendOTP}
-                  disabled={resendTimer > 0}
-                  className="text-blue-600 hover:text-blue-700 disabled:text-gray-400 text-sm"
-                >
-                  {resendTimer > 0 ? `Resend code in ${resendTimer}s` : 'Resend verification code'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {step === 'success' && (
-            <div className="text-center space-y-4">
-              <CheckCircle className="w-16 h-16 text-green-500 mx-auto" />
-              <h3 className="text-xl font-semibold text-gray-800">Registration Complete!</h3>
-              <p className="text-gray-600">
-                Welcome to ExamScan! Your account has been created successfully.
-              </p>
-              <p className="text-sm text-gray-500">
-                Redirecting to dashboard...
-              </p>
-            </div>
-          )}
 
           <div className="mt-6 text-center">
             <p className="text-gray-600">

@@ -15,7 +15,7 @@ interface Exam {
   scansCount: number;
 }
 
-interface User {
+interface ApiUser {
   id: number;
   username: string;
   email: string;
@@ -60,7 +60,7 @@ const Dashboard = (): React.JSX.Element => {
 
   const loadExams = async (token: string): Promise<void> => {
     try {
-      const response = await fetch('/functions/exams.ts', {
+      const response = await fetch('/.netlify/functions/exams', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -96,7 +96,7 @@ const Dashboard = (): React.JSX.Element => {
     try {
       const authData = getAuthCookies();
       if (authData?.token) {
-        await fetch('/functions/logout.ts', {
+        await fetch('/.netlify/functions/logout', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${authData.token}`,
