@@ -44,7 +44,9 @@ export const SECURITY_CONFIG = {
     'X-Frame-Options': 'DENY',
     'X-XSS-Protection': '1; mode=block',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
-    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    // Allow camera access for this app (needed for answer sheet scanning)
+    // Keep microphone and geolocation disabled by default
+    'Permissions-Policy': 'camera=*, microphone=(), geolocation=()',
     'Cross-Origin-Embedder-Policy': 'require-corp',
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Cross-Origin-Resource-Policy': 'same-origin',
@@ -114,10 +116,13 @@ export const isSuspiciousEmailDomain = (email: string): boolean => {
  * Generate secure random string
  */
 export const generateSecureId = (length: number = 32): string => {
+  // Use crypto API in the browser (CSPRNG)
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
   let result = '';
   for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+    result += chars[bytes[i] % chars.length];
   }
   return result;
 };

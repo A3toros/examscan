@@ -1,0 +1,227 @@
+{
+  "lessons": {
+    "A1-L1": {
+      "title": "Introductions and Names",
+      "description": "Learn to introduce yourself and talk about names",
+      "warmup": {
+        "prompt": "What is your name and where are you from?"
+      },
+      "vocabulary": {
+        "words": [
+          { "en": "name", "th": "ชื่อ", "audio": "name.mp3" },
+          { "en": "country", "th": "ประเทศ", "audio": "country.mp3" },
+          { "en": "from", "th": "จาก", "audio": "from.mp3" },
+          { "en": "live", "th": "อาศัยอยู่", "audio": "live.mp3" },
+          { "en": "student", "th": "นักเรียน", "audio": "student.mp3" }
+        ],
+        "matching": [
+          { "word": "name", "meanings": ["what people call you", "a nation", "shows origin"], "correct": 0 },
+          { "word": "country", "meanings": ["a nation", "what people call you", "shows origin"], "correct": 0 },
+          { "word": "from", "meanings": ["shows origin", "a nation", "what people call you"], "correct": 0 }
+        ],
+        "fillBlanks": [
+          { "sentence": "My ___ is Tom.", "options": ["name", "country", "live"], "correct": 0 },
+          { "sentence": "I am ___ Thailand.", "options": ["from", "student", "live"], "correct": 0 }
+        ]
+      },
+      "grammar": {
+        "sentences": [
+          { "words": ["my", "name", "is", "Anna"], "correct": "My name is Anna." },
+          { "words": ["I", "am", "from", "Thailand"], "correct": "I am from Thailand." },
+          { "words": ["She", "is", "a", "student"], "correct": "She is a student." }
+        ]
+      },
+      "speaking": {
+        "prompts": ["Please introduce yourself. Say your name and where you are from."],
+        "feedbackCriteria": {
+          "grammar": true,
+          "vocabulary": true,
+          "pronunciation": true
+        }
+      },
+      "reading": {
+        "text": "My name is Anna. I am from Thailand. I am a student. I go to school every day.",
+        "similarityThreshold": 70
+      }
+    },
+    "A1-L2": {
+      "title": "Daily Routines",
+      "description": "Learn about daily activities and routines",
+      "warmup": {
+        "prompt": "What do you do every day?"
+      },
+      "vocabulary": {
+        "words": [
+          { "en": "wake up", "th": "ตื่นนอน", "audio": "wake_up.mp3" },
+          { "en": "eat breakfast", "th": "กินอาหารเช้า", "audio": "eat_breakfast.mp3" },
+          { "en": "go to school", "th": "ไปโรงเรียน", "audio": "go_to_school.mp3" },
+          { "en": "study", "th": "เรียน", "audio": "study.mp3" },
+          { "en": "sleep", "th": "นอน", "audio": "sleep.mp3" }
+        ],
+        "matching": [
+          { "word": "wake up", "meanings": ["get out of bed", "have breakfast", "go to school"], "correct": 0 },
+          { "word": "eat breakfast", "meanings": ["have morning meal", "get out of bed", "go to school"], "correct": 0 },
+          { "word": "go to school", "meanings": ["attend classes", "have morning meal", "get out of bed"], "correct": 0 }
+        ],
+        "fillBlanks": [
+          { "sentence": "I ___ at 7 AM.", "options": ["wake up", "eat breakfast", "sleep"], "correct": 0 },
+          { "sentence": "I ___ breakfast.", "options": ["eat", "go to", "study"], "correct": 0 }
+        ]
+      },
+      "grammar": {
+        "sentences": [
+          { "words": ["I", "wake", "up", "early"], "correct": "I wake up early." },
+          { "words": ["She", "eats", "breakfast", "at", "7"], "correct": "She eats breakfast at 7." },
+          { "words": ["We", "go", "to", "school"], "correct": "We go to school." }
+        ]
+      },
+      "speaking": {
+        "prompts": ["Describe your daily routine. What time do you wake up?"],
+        "feedbackCriteria": {
+          "grammar": true,
+          "vocabulary": true,
+          "pronunciation": true
+        }
+      },
+      "reading": {
+        "text": "I wake up at 7 AM. I eat breakfast at 7:30. I go to school at 8 AM. I study English. I sleep at 10 PM.",
+        "similarityThreshold": 70
+      }
+    },
+    "A1-L3": {
+      "title": "Family and Friends",
+      "description": "Learn to talk about your family and friends",
+      "warmup": {
+        "prompt": "Tell me about your family."
+      },
+      "vocabulary": {
+        "words": [
+          { "en": "family", "th": "ครอบครัว", "audio": "family.mp3" },
+          { "en": "mother", "th": "แม่", "audio": "mother.mp3" },
+          { "en": "father", "th": "พ่อ", "audio": "father.mp3" },
+          { "en": "brother", "th": "พี่ชาย/น้องชาย", "audio": "brother.mp3" },
+          { "en": "sister", "th": "พี่สาว/น้องสาว", "audio": "sister.mp3" },
+          { "en": "friend", "th": "เพื่อน", "audio": "friend.mp3" }
+        ],
+        "matching": [
+          { "word": "mother", "meanings": ["female parent", "male parent", "sibling"], "correct": 0 },
+          { "word": "father", "meanings": ["male parent", "female parent", "sibling"], "correct": 0 },
+          { "word": "friend", "meanings": ["someone you know", "family member", "teacher"], "correct": 0 }
+        ],
+        "fillBlanks": [
+          { "sentence": "My ___ is a teacher.", "options": ["mother", "father", "friend"], "correct": 0 },
+          { "sentence": "I have a ___ named Tom.", "options": ["friend", "mother", "father"], "correct": 0 }
+        ]
+      },
+      "grammar": {
+        "sentences": [
+          { "words": ["My", "mother", "is", "a", "teacher"], "correct": "My mother is a teacher." },
+          { "words": ["I", "have", "two", "brothers"], "correct": "I have two brothers." },
+          { "words": ["She", "is", "my", "friend"], "correct": "She is my friend." }
+        ]
+      },
+      "speaking": {
+        "prompts": ["Tell me about your family. How many brothers and sisters do you have?"],
+        "feedbackCriteria": {
+          "grammar": true,
+          "vocabulary": true,
+          "pronunciation": true
+        }
+      },
+      "reading": {
+        "text": "My family has 5 people. My mother is a teacher. My father is a doctor. I have one brother and one sister. My brother is 15 years old. My sister is 12 years old.",
+        "similarityThreshold": 70
+      }
+    },
+    "A1-L4": {
+      "title": "Food and Drinks",
+      "description": "Learn about food and favorite meals",
+      "warmup": {
+        "prompt": "What is your favorite food?"
+      },
+      "vocabulary": {
+        "words": [
+          { "en": "food", "th": "อาหาร", "audio": "food.mp3" },
+          { "en": "water", "th": "น้ำ", "audio": "water.mp3" },
+          { "en": "rice", "th": "ข้าว", "audio": "rice.mp3" },
+          { "en": "bread", "th": "ขนมปัง", "audio": "bread.mp3" },
+          { "en": "fruit", "th": "ผลไม้", "audio": "fruit.mp3" },
+          { "en": "meat", "th": "เนื้อ", "audio": "meat.mp3" }
+        ],
+        "matching": [
+          { "word": "water", "meanings": ["something to drink", "something to eat", "something to cook"], "correct": 0 },
+          { "word": "rice", "meanings": ["a grain food", "a drink", "a fruit"], "correct": 0 },
+          { "word": "fruit", "meanings": ["sweet food from plants", "grain food", "meat"], "correct": 0 }
+        ],
+        "fillBlanks": [
+          { "sentence": "I like to eat ___.", "options": ["rice", "water", "bread"], "correct": 0 },
+          { "sentence": "I drink ___ every day.", "options": ["water", "rice", "meat"], "correct": 0 }
+        ]
+      },
+      "grammar": {
+        "sentences": [
+          { "words": ["I", "like", "rice"], "correct": "I like rice." },
+          { "words": ["She", "drinks", "water"], "correct": "She drinks water." },
+          { "words": ["We", "eat", "fruit"], "correct": "We eat fruit." }
+        ]
+      },
+      "speaking": {
+        "prompts": ["What food do you like? What is your favorite drink?"],
+        "feedbackCriteria": {
+          "grammar": true,
+          "vocabulary": true,
+          "pronunciation": true
+        }
+      },
+      "reading": {
+        "text": "I eat rice every day. Rice is good for you. I drink water with my meals. I like fruit for dessert. My favorite fruit is apple. What is your favorite food?",
+        "similarityThreshold": 70
+      }
+    },
+    "A1-L5": {
+      "title": "Numbers and Time",
+      "description": "Learn numbers and tell time",
+      "warmup": {
+        "prompt": "What time is it now?"
+      },
+      "vocabulary": {
+        "words": [
+          { "en": "one", "th": "หนึ่ง", "audio": "one.mp3" },
+          { "en": "two", "th": "สอง", "audio": "two.mp3" },
+          { "en": "three", "th": "สาม", "audio": "three.mp3" },
+          { "en": "time", "th": "เวลา", "audio": "time.mp3" },
+          { "en": "clock", "th": "นาฬิกา", "audio": "clock.mp3" },
+          { "en": "hour", "th": "ชั่วโมง", "audio": "hour.mp3" }
+        ],
+        "matching": [
+          { "word": "one", "meanings": ["number 1", "number 2", "time"], "correct": 0 },
+          { "word": "time", "meanings": ["what clocks show", "number 1", "number 2"], "correct": 0 },
+          { "word": "clock", "meanings": ["time-telling device", "number 1", "what clocks show"], "correct": 0 }
+        ],
+        "fillBlanks": [
+          { "sentence": "It is ___ o'clock.", "options": ["one", "two", "time"], "correct": 0 },
+          { "sentence": "I have ___ brothers.", "options": ["two", "time", "clock"], "correct": 0 }
+        ]
+      },
+      "grammar": {
+        "sentences": [
+          { "words": ["It", "is", "one", "o'clock"], "correct": "It is one o'clock." },
+          { "words": ["I", "have", "two", "books"], "correct": "I have two books." },
+          { "words": ["She", "is", "three", "years", "old"], "correct": "She is three years old." }
+        ]
+      },
+      "speaking": {
+        "prompts": ["What time do you wake up? Count from 1 to 10."],
+        "feedbackCriteria": {
+          "grammar": true,
+          "vocabulary": true,
+          "pronunciation": true
+        }
+      },
+      "reading": {
+        "text": "It is 8 o'clock. School starts at 8. I wake up at 7. I eat breakfast at 7:30. I go to school at 8. What time do you wake up?",
+        "similarityThreshold": 70
+      }
+    }
+  }
+}

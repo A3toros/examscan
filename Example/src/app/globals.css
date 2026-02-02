@@ -1,0 +1,142 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Admin Panel Pastel Color Palette (Sky Blue → Purple) */
+:root {
+  /* Primary Colors */
+  --primary-sky: #87CEEB;
+  --primary-light: #B19CD9;
+  --primary-purple: #9B7EBD;
+  --primary-dark: #7B68EE;
+
+  /* Accent Colors */
+  --accent-mint: #A8DADC;
+  --accent-lavender: #D4CCE8;
+
+  /* Surface Colors */
+  --surface-light: #F8F9FF;
+  --surface-medium: #E8EFFF;
+  --surface-dark: #D1D9E6;
+
+  /* Admin-specific colors */
+  --admin-bg: #F8F9FF;
+  --admin-card: linear-gradient(135deg, #F8F9FF 0%, #E8EFFF 100%);
+  --admin-border: #D4CCE8;
+  --admin-text: #2D3748;
+  --admin-text-secondary: #4A5568;
+}
+
+/* Custom base styles for TutorCat */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-gradient-pastel min-h-screen;
+    font-family: var(--font-inter);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-poppins);
+    @apply font-semibold;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-neutral-100;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-primary-400 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-primary-500;
+  }
+}
+
+/* Custom component styles */
+@layer components {
+  .btn-primary {
+    @apply px-6 py-3 bg-gradient-primary text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:ring-offset-2;
+  }
+
+  .btn-secondary {
+    @apply px-6 py-3 bg-white text-primary-600 font-semibold rounded-lg border-2 border-primary-200 hover:border-primary-300 hover:bg-primary-50 transform hover:scale-105 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:ring-offset-2;
+  }
+
+  .card {
+    @apply bg-white rounded-xl shadow-lg border border-neutral-200 hover:shadow-xl transition-shadow duration-300;
+  }
+
+  .input-primary {
+    @apply w-full px-4 py-3 border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-400 focus:border-primary-400 transition-colors duration-200 placeholder-neutral-400;
+  }
+
+  /* Mascot animations */
+  .mascot-bounce {
+    animation: bounce-slow 3s infinite;
+  }
+
+  .mascot-pulse {
+    animation: pulse-slow 4s infinite;
+  }
+
+  .mascot-meow {
+    animation: meow 0.6s ease-in-out;
+  }
+
+  /* Speech bubble styles */
+  .speech-bubble {
+    @apply relative bg-white rounded-2xl px-6 py-4 shadow-lg border-2 border-neutral-200;
+  }
+
+  .speech-bubble::after {
+    content: '';
+    @apply absolute top-full left-8 w-0 h-0 border-l-8 border-r-8 border-t-8 border-l-transparent border-r-transparent border-t-white;
+  }
+
+  /* Progress bar styles */
+  .progress-bar {
+    @apply w-full bg-neutral-200 rounded-full h-3 overflow-hidden;
+  }
+
+  .progress-fill {
+    @apply h-full bg-gradient-primary rounded-full transition-all duration-500 ease-out;
+  }
+
+  /* Modal backdrop */
+  .modal-backdrop {
+    @apply fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4;
+  }
+
+  .modal-content {
+    @apply bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto;
+  }
+}
+
+/* Utility classes for TutorCat */
+@layer utilities {
+  .text-shadow {
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  .glow-primary {
+    box-shadow: 0 0 20px rgba(97, 117, 255, 0.3);
+  }
+
+  .glow-secondary {
+    box-shadow: 0 0 20px rgba(217, 70, 255, 0.3);
+  }
+
+  /* Mobile-first responsive utilities */
+  .container-mobile {
+    @apply px-4 mx-auto max-w-screen-sm sm:max-w-screen-md md:max-w-screen-lg lg:max-w-screen-xl;
+  }
+}

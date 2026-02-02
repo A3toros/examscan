@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FileText, Camera, Plus, Eye, Download, Trash2, ArrowLeft, Calendar, Users, LogOut, User } from 'lucide-react';
+import { FileText, Camera, Plus, Eye, Download, Printer, Trash2, Calendar, Users, LogOut, User as UserIcon } from 'lucide-react';
 import Card from './ui/Card';
 import Button from './ui/Button';
-import { getAuthCookies, clearAuthCookies } from '../utils/auth';
+import { getCurrentUser, logout, authenticatedFetch, type User } from '../utils/auth';
+import jsPDF from 'jspdf';
+import { BUBBLE_SPACING_MM, getOptionOffsets } from '../utils/pdfLayout';
 
 interface Exam {
   id: number;
@@ -13,6 +15,26 @@ interface Exam {
   createdAt: string;
   status: 'draft' | 'active' | 'completed';
   scansCount: number;
+}
+
+interface FullExamData {
+  id: number;
+  exam_name: string;
+  description?: string;
+  total_questions: number;
+  test_structure: { type: string; count: number }[];
+  answer_key: Record<number, string>;
+  student_info?: {
+    name: boolean;
+    last_name: boolean;
+    nickname: boolean;
+    class: boolean;
+    student_id?: boolean;
+    student_id_digits?: number;
+  };
+  created_at: string;
+  status: string;
+  total_scans: number;
 }
 
 interface ApiUser {
@@ -44,28 +66,26 @@ const Dashboard = (): React.JSX.Element => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Check authentication using cookies
-    const authData = getAuthCookies();
+    // Check authentication and load user
+    const checkAuth = async () => {
+      const user = await getCurrentUser();
+      
+      if (!user) {
+        navigate('/login');
+        return;
+      }
 
-    if (!authData) {
-      navigate('/login');
-      return;
-    }
+      setTeacher(user);
+      // Load exams from API
+      await loadExams();
+    };
 
-    setTeacher(authData.user);
+    checkAuth();
+  }, [navigate]);
 
-    // Load exams from API
-    loadExams(authData.token);
-  }, [navigate]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const loadExams = async (token: string): Promise<void> => {
+  const loadExams = async (): Promise<void> => {
     try {
-      const response = await fetch('/.netlify/functions/exams', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const response = await authenticatedFetch('/.netlify/functions/exams');
 
       if (response.ok) {
         const data: ExamsResponse = await response.json();
@@ -94,25 +114,555 @@ const Dashboard = (): React.JSX.Element => {
 
   const handleLogout = async (): Promise<void> => {
     try {
-      const authData = getAuthCookies();
-      if (authData?.token) {
-        await fetch('/.netlify/functions/logout', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${authData.token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-      }
+      await logout();
     } catch {
       // Logout error
     }
 
-    // Clear authentication cookies
-    clearAuthCookies();
-
     // Redirect to login
     navigate('/login');
+  };
+
+  const fetchFullExamData = async (examId: number): Promise<FullExamData | null> => {
+    try {
+      const response = await authenticatedFetch(`/.netlify/functions/exams?id=${examId}`);
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Fetched exam data:', data);
+        
+        if (data.exam) {
+          // Ensure JSONB fields are objects (Neon returns them as objects already, but double-check)
+          const exam = data.exam;
+          
+          // Parse JSONB fields if they're strings (shouldn't be needed but safety check)
+          const examData: FullExamData = {
+            ...exam,
+            test_structure: typeof exam.test_structure === 'string' 
+              ? JSON.parse(exam.test_structure) 
+              : exam.test_structure,
+            answer_key: typeof exam.answer_key === 'string'
+              ? JSON.parse(exam.answer_key)
+              : exam.answer_key,
+            student_info: exam.student_info && typeof exam.student_info === 'string'
+              ? JSON.parse(exam.student_info)
+              : exam.student_info
+          };
+          
+          console.log('Processed exam data:', examData);
+          return examData;
+        }
+        return null;
+      } else {
+        const errorText = await response.text();
+        console.error('Failed to fetch exam:', response.status, errorText);
+        return null;
+      }
+    } catch (error) {
+      console.error('Error fetching exam:', error);
+      return null;
+    }
+  };
+
+  const generatePDF = (examData: FullExamData): jsPDF => {
+    // Validate exam data before generating PDF
+    if (!examData.test_structure || !Array.isArray(examData.test_structure)) {
+      throw new Error(`Invalid test_structure: expected array, got ${typeof examData.test_structure}`);
+    }
+    
+    if (examData.test_structure.length === 0) {
+      throw new Error('test_structure is empty');
+    }
+
+    // Helper function to generate option labels (A-D)
+    const getOptionLabels = (count: number): string[] => {
+      const safeCount = Math.min(4, Math.max(2, count));
+      return Array.from({ length: safeCount }, (_, i) => String.fromCharCode(65 + i)); // A, B, C, D
+    };
+
+    // Helper function to draw fiducial markers for camera recognition (nested squares)
+    const drawCornerMarkers = (pdf: jsPDF) => {
+      const markerSize = 12; // Size of outer square (mm)
+      const innerInset = 2; // White inset
+      const innerInset2 = 4; // Inner black square inset
+      const pageWidth = 210; // A4 width in mm
+      const pageHeight = 297; // A4 height in mm
+      const margin = 5; // Margin from edge
+
+      const drawMarker = (x: number, y: number) => {
+        pdf.setFillColor(0, 0, 0);
+        pdf.rect(x, y, markerSize, markerSize, 'F');
+        pdf.setFillColor(255, 255, 255);
+        pdf.rect(x + innerInset, y + innerInset, markerSize - innerInset * 2, markerSize - innerInset * 2, 'F');
+        pdf.setFillColor(0, 0, 0);
+        pdf.rect(x + innerInset2, y + innerInset2, markerSize - innerInset2 * 2, markerSize - innerInset2 * 2, 'F');
+      };
+
+      drawMarker(margin, margin);
+      drawMarker(pageWidth - margin - markerSize, margin);
+      drawMarker(margin, pageHeight - margin - markerSize);
+      drawMarker(pageWidth - margin - markerSize, pageHeight - margin - markerSize);
+    };
+
+    // Helper function to draw footer on each page
+    const drawFooter = (pdf: jsPDF) => {
+      const pageWidth = 210; // A4 width in mm
+      const pageHeight = 297; // A4 height in mm
+      const footerY = pageHeight - 10; // 10mm from bottom
+      
+      pdf.setFontSize(8);
+      pdf.setTextColor(100, 100, 100); // Gray color for footer
+      const footerText = 'ExamScan by Aleksand Petrov';
+      const textWidth = pdf.getTextWidth(footerText);
+      // Center the footer text
+      pdf.text(footerText, (pageWidth / 2) - (textWidth / 2), footerY);
+      pdf.setTextColor(0, 0, 0); // Reset to black
+    };
+
+    try {
+      const pdf = new jsPDF();
+      // Use actual A4 dimensions from jsPDF for pagination
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 20;
+      
+      // Add corner markers for camera recognition on first page
+      drawCornerMarkers(pdf);
+      // Add footer on first page
+      drawFooter(pdf);
+      
+      // Set up the document - compact header
+      pdf.setFontSize(16);
+      pdf.text(examData.exam_name || 'Untitled Exam', 20, 18);
+
+      if (examData.description) {
+        pdf.setFontSize(9);
+        pdf.text(examData.description, 20, 26);
+      }
+
+      let yPosition: number = 34;
+
+      // Student Information - all fields on one line
+      const studentInfo = examData.student_info || { name: true, last_name: true, nickname: false, class: true };
+      const studentFields = [];
+      if (studentInfo.name) studentFields.push('Name: _______________');
+      if (studentInfo.last_name) studentFields.push('Last Name: _______________');
+      if (studentInfo.nickname) studentFields.push('Nickname: _______________');
+      if (studentInfo.class) studentFields.push('Class: _______________');
+
+      if (studentFields.length > 0) {
+        pdf.setFontSize(9);
+        // Put all fields on one line with separators
+        pdf.text(studentFields.join('  |  '), 20, yPosition);
+        yPosition += 10;
+      }
+
+      // Student ID Section - on next line with special numbered squares
+      if (studentInfo.student_id) {
+        pdf.setFontSize(9);
+        pdf.text('Student ID:', 20, yPosition);
+        yPosition += 8;
+
+        const squareWidth = 5.5;  // Match example digit width
+        const squareHeight = 7;   // Match example digit height
+        const squaresPerRow = 10;
+        const squareSpacing = 1;
+        const startX = 20;
+        const digits = Number(studentInfo.student_id_digits) || 6;
+
+        for (let i = 0; i < digits; i++) {
+          const row = Math.floor(i / squaresPerRow);
+          const col = i % squaresPerRow;
+          const x = startX + (col * (squareWidth + squareSpacing));
+          const y = yPosition + (row * (squareHeight + squareSpacing + 5));
+
+          // "Digital 8" style guide only (no outer box)
+          pdf.setDrawColor(200, 200, 200);
+          pdf.setLineWidth(0.3);
+
+          const px = x;
+          const py = y;
+          const w = squareWidth;
+          const h = squareHeight;
+
+          const inset = 0.8;
+          const gap = 0.15; // match example digit spacing
+          const topY = py + inset;
+          const upperMidY = py + h / 3;
+          const centerY = py + h / 2;
+          const lowerMidY = py + (2 * h) / 3;
+          const bottomY = py + h - inset;
+
+          const leftX = px + inset;
+          const innerLeftX = px + w / 3;
+          const innerRightX = px + (2 * w) / 3;
+          const rightX = px + w - inset;
+
+          // Horizontal segments (like digital 8)
+          pdf.line(innerLeftX + gap, topY, innerRightX - gap, topY);           // top
+          pdf.line(innerLeftX + gap, centerY, innerRightX - gap, centerY);     // middle
+          pdf.line(innerLeftX + gap, bottomY, innerRightX - gap, bottomY);     // bottom
+
+          // Vertical segments (upper)
+          pdf.line(leftX, topY + gap, leftX, upperMidY - gap);                 // upper-left
+          pdf.line(rightX, topY + gap, rightX, upperMidY - gap);               // upper-right
+
+          // Vertical segments (lower)
+          pdf.line(leftX, lowerMidY + gap, leftX, bottomY - gap);              // lower-left
+          pdf.line(rightX, lowerMidY + gap, rightX, bottomY - gap);            // lower-right
+
+          // No position numbers below grids
+        }
+
+        const rowsNeeded = Math.ceil(digits / squaresPerRow);
+        yPosition += (rowsNeeded * (squareHeight + squareSpacing + 6)) + 4;
+
+        // Ensure we have room for the examples, otherwise move to a new page
+        if (yPosition > pageHeight - margin - 30) {
+          pdf.addPage();
+          drawCornerMarkers(pdf);
+          drawFooter(pdf);
+          yPosition = 20;
+        }
+
+        // Digital number examples (0–9) using the same "digital 8" style grid
+        pdf.setFontSize(8);
+        pdf.text('Example digits (digital style):', 20, yPosition);
+        yPosition += 5;
+
+        const digitWidth = 4.5;  // Smaller example
+        const digitHeight = 6;
+        const digitSpacing = 2.5;
+        const legendStartX = 20;
+        const legendY = yPosition;
+
+        const digitSegments: Record<number, string[]> = {
+          0: ['A', 'B', 'C', 'E', 'F', 'G'],
+          1: ['B', 'C'],
+          2: ['A', 'B', 'D', 'E', 'G'],
+          3: ['A', 'B', 'C', 'D', 'G'],
+          4: ['B', 'C', 'D', 'F'],
+          5: ['A', 'C', 'D', 'F', 'G'],
+          6: ['A', 'C', 'D', 'E', 'F', 'G'],
+          7: ['A', 'B', 'C'],
+          8: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+          9: ['A', 'B', 'C', 'D', 'F', 'G'],
+        };
+
+        for (let d = 0; d <= 9; d++) {
+          const x = legendStartX + d * (digitWidth + digitSpacing);
+          const y = legendY;
+
+          const px = x;
+          const py = y;
+          const w = digitWidth;
+          const h = digitHeight;
+
+          const insetDigit = 0.8;
+          const gapDigit = 0.15;
+          const topYdigit = py + insetDigit;
+          const centerYdigit = py + h / 2;
+          const bottomYdigit = py + h - insetDigit;
+
+          const leftXdigit = px + insetDigit;
+          const innerLeftXdigit = px + w / 3;
+          const innerRightXdigit = px + (2 * w) / 3;
+          const rightXdigit = px + w - insetDigit;
+
+          const active = new Set(digitSegments[d] || []);
+
+          pdf.setDrawColor(0, 0, 0); // Black for visibility
+          pdf.setLineWidth(0.3);
+
+          // Horizontals: A (top), D (middle), G (bottom)
+          if (active.has('A')) {
+            pdf.line(innerLeftXdigit + gapDigit, topYdigit, innerRightXdigit - gapDigit, topYdigit);
+          }
+          if (active.has('D')) {
+            pdf.line(innerLeftXdigit + gapDigit, centerYdigit, innerRightXdigit - gapDigit, centerYdigit);
+          }
+          if (active.has('G')) {
+            pdf.line(innerLeftXdigit + gapDigit, bottomYdigit, innerRightXdigit - gapDigit, bottomYdigit);
+          }
+
+          // Verticals: F (upper-left), B (upper-right), E (lower-left), C (lower-right)
+          const upperMidYdigit = py + h / 3;
+          const lowerMidYdigit = py + (2 * h) / 3;
+
+          if (active.has('F')) {
+            pdf.line(leftXdigit, topYdigit + gapDigit, leftXdigit, upperMidYdigit - gapDigit);
+          }
+          if (active.has('B')) {
+            pdf.line(rightXdigit, topYdigit + gapDigit, rightXdigit, upperMidYdigit - gapDigit);
+          }
+          if (active.has('E')) {
+            pdf.line(leftXdigit, lowerMidYdigit + gapDigit, leftXdigit, bottomYdigit - gapDigit);
+          }
+          if (active.has('C')) {
+            pdf.line(rightXdigit, lowerMidYdigit + gapDigit, rightXdigit, bottomYdigit - gapDigit);
+          }
+
+          // No numeric labels under example digits
+        }
+
+        yPosition += digitHeight + 6;
+      }
+
+      // Compact instructions - placed after student info and ID
+      pdf.setFontSize(9);
+      pdf.text('Instructions: Fill bubbles completely • Keep marks within circles • Erase completely to change', 20, yPosition);
+      yPosition += 6;
+
+      // Start marker to help CV align the first row of bubbles
+      const startMarkerY = yPosition + 2;
+      pdf.setDrawColor(0, 0, 0);
+      pdf.setLineWidth(0.6);
+      pdf.line(20, startMarkerY, pageWidth - 20, startMarkerY);
+      pdf.setFontSize(8);
+      pdf.text('START', 20, startMarkerY - 2);
+      yPosition += 8;
+
+      let questionNumber = 1;
+
+      // Generate answer bubbles for each test section
+      examData.test_structure.forEach((section: any, index: number) => {
+        if (!section || typeof section.type !== 'string' || typeof section.count !== 'number') {
+          throw new Error(`Invalid section at index ${index}: ${JSON.stringify(section)}`);
+        }
+        
+        // Ensure count is a valid positive number
+        const sectionCount = Number(section.count);
+        if (isNaN(sectionCount) || sectionCount <= 0) {
+          console.error('Invalid section count:', section.count);
+          throw new Error(`Invalid section count at index ${index}: ${section.count}`);
+        }
+        
+        // Ensure type is valid
+        if (section.type !== 'mc' && section.type !== 'tf') {
+          console.error('Invalid section type:', section.type);
+          throw new Error(`Invalid section type at index ${index}: ${section.type}`);
+        }
+
+        // Compact section header - ensure we stay within A4 height
+        if (yPosition > pageHeight - margin - 40) {
+          pdf.addPage();
+          // Add corner markers on new page for camera recognition
+          drawCornerMarkers(pdf);
+          // Add footer on new page
+          drawFooter(pdf);
+          yPosition = 20;
+        }
+
+        pdf.setFontSize(11);
+        const sectionType = section.type === 'mc' ? 'Multiple Choice' : 'True/False';
+        pdf.text(`${sectionType} (${sectionCount} questions)`, 20, yPosition);
+        yPosition += 8;
+
+        // Generate bubbles in a grid layout - 5 questions per row with clear separation
+        const questionsPerRow = 5;
+        const usableWidth = pageWidth - (margin * 2);
+        const questionWidth = usableWidth / questionsPerRow;
+        const rowHeight = 20; // Height of each row
+        const padding = 2; // Padding inside each question box
+        
+        for (let i = 0; i < sectionCount; i++) {
+          const row = Math.floor(i / questionsPerRow);
+          const col = i % questionsPerRow;
+          const questionY = yPosition + (row * rowHeight);
+          
+          // Check if we need a new page for this row of questions
+          if (questionY + rowHeight > pageHeight - margin) {
+            pdf.addPage();
+            // Add corner markers on new page for camera recognition
+            drawCornerMarkers(pdf);
+            // Add footer on new page
+            drawFooter(pdf);
+            yPosition = 20;
+            // Recalculate row for new page
+            const newRow = 0;
+            const actualY = yPosition + (newRow * rowHeight);
+            const questionStartX = margin + (col * questionWidth);
+            const questionCenterX = questionStartX + (questionWidth / 2);
+            
+            // Draw border around question for separation
+            pdf.setDrawColor(200, 200, 200); // Light gray border
+            pdf.setLineWidth(0.1);
+            pdf.rect(questionStartX + padding, actualY, questionWidth - (padding * 2), rowHeight - 2);
+            
+            // Centered question number
+            pdf.setFontSize(8);
+            const questionText = `Q${questionNumber}`;
+            const textWidth = pdf.getTextWidth(questionText);
+            pdf.text(questionText, questionCenterX - (textWidth / 2), actualY + 3);
+
+            // Draw bubbles - compact grid layout, centered
+            const bubbleY = actualY + 8;
+            const options = section.type === 'mc' 
+              ? getOptionLabels(section.options || 4) 
+              : ['T', 'F'];
+            const offsets = getOptionOffsets(options.length, BUBBLE_SPACING_MM);
+
+            options.forEach((option, optionIndex) => {
+              const x = questionCenterX + offsets[optionIndex];
+              // Draw circle - smaller radius for compact look
+              pdf.setDrawColor(0, 0, 0); // Black for circles
+              pdf.circle(x, bubbleY, 2.5, 'S');
+              // Option label - smaller font
+              pdf.setFontSize(6);
+              pdf.text(option, x - 1, bubbleY + 4);
+            });
+            
+            // Update yPosition for next row
+            yPosition = actualY + rowHeight;
+          } else {
+            const questionStartX = margin + (col * questionWidth);
+            const questionCenterX = questionStartX + (questionWidth / 2);
+            
+            // Draw border around question for separation
+            pdf.setDrawColor(200, 200, 200); // Light gray border
+            pdf.setLineWidth(0.1);
+            pdf.rect(questionStartX + padding, questionY, questionWidth - (padding * 2), rowHeight - 2);
+            
+            // Centered question number
+            pdf.setFontSize(8);
+            const questionText = `Q${questionNumber}`;
+            const textWidth = pdf.getTextWidth(questionText);
+            pdf.text(questionText, questionCenterX - (textWidth / 2), questionY + 3);
+
+            // Draw bubbles - compact grid layout, centered
+            const bubbleY = questionY + 8;
+            const options = section.type === 'mc' 
+              ? getOptionLabels(section.options || 4) 
+              : ['T', 'F'];
+            const offsets = getOptionOffsets(options.length, BUBBLE_SPACING_MM);
+
+            options.forEach((option, optionIndex) => {
+              const x = questionCenterX + offsets[optionIndex];
+              // Draw circle - smaller radius for compact look
+              pdf.setDrawColor(0, 0, 0); // Black for circles
+              pdf.circle(x, bubbleY, 2.5, 'S');
+              // Option label - smaller font
+              pdf.setFontSize(6);
+              pdf.text(option, x - 1, bubbleY + 4);
+            });
+          }
+          
+          questionNumber++;
+        }
+
+        // Move to next row after all questions in section
+        const totalRows = Math.ceil(sectionCount / questionsPerRow);
+        yPosition += (totalRows * rowHeight) + 5; // Space after section
+      });
+
+      return pdf;
+    } catch (error) {
+      console.error('PDF generation error:', error);
+      console.error('Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        errorType: typeof error,
+        errorValue: error
+      });
+      console.error('Exam data that caused error:', examData);
+      console.error('Test structure:', examData.test_structure);
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+  };
+
+  const handleViewExam = async (examId: number): Promise<void> => {
+    try {
+      const examData = await fetchFullExamData(examId);
+      if (!examData) {
+        alert('Failed to load exam data. Please try again.');
+        return;
+      }
+
+      // Validate exam data structure
+      if (!examData.test_structure || !Array.isArray(examData.test_structure)) {
+        console.error('Invalid test_structure:', examData.test_structure);
+        alert('Invalid exam data structure. Please try again.');
+        return;
+      }
+
+      // Generate PDF and open in new window for viewing
+      const pdf = generatePDF(examData);
+      const pdfBlob = pdf.output('blob');
+      const pdfUrl = URL.createObjectURL(pdfBlob);
+      window.open(pdfUrl, '_blank');
+      // Clean up after a delay
+      setTimeout(() => URL.revokeObjectURL(pdfUrl), 100);
+    } catch (error) {
+      console.error('View error:', error);
+      alert(`Failed to view exam: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleDownloadExam = async (examId: number, examName: string): Promise<void> => {
+    const examData = await fetchFullExamData(examId);
+    if (!examData) {
+      alert('Failed to load exam data. Please try again.');
+      return;
+    }
+
+    try {
+      const pdf = generatePDF(examData);
+      pdf.save(`${examName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_answer_sheet.pdf`);
+    } catch (error) {
+      console.error('Download error:', error);
+      alert('Failed to download exam. Please try again.');
+    }
+  };
+
+  const handlePrintExam = async (examId: number): Promise<void> => {
+    const examData = await fetchFullExamData(examId);
+    if (!examData) {
+      alert('Failed to load exam data. Please try again.');
+      return;
+    }
+
+    try {
+      const pdf = generatePDF(examData);
+      const pdfBlob = pdf.output('blob');
+      const pdfUrl = URL.createObjectURL(pdfBlob);
+      
+      // Open PDF in new window and trigger print
+      const printWindow = window.open(pdfUrl, '_blank');
+      if (printWindow) {
+        printWindow.onload = () => {
+          setTimeout(() => {
+            printWindow.print();
+            URL.revokeObjectURL(pdfUrl);
+          }, 250);
+        };
+      }
+    } catch (error) {
+      console.error('Print error:', error);
+      alert('Failed to print exam. Please try again.');
+    }
+  };
+
+  const handleDeleteExam = async (examId: number, examName: string): Promise<void> => {
+    if (!confirm(`Are you sure you want to delete "${examName}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const response = await authenticatedFetch(`/.netlify/functions/exams`, {
+        method: 'DELETE',
+        body: JSON.stringify({ id: examId })
+      });
+
+      if (response.ok) {
+        // Remove exam from list
+        setExams(exams.filter(exam => exam.id !== examId));
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        alert(errorData.error || 'Failed to delete exam. Please try again.');
+      }
+    } catch (error) {
+      console.error('Delete error:', error);
+      alert('Failed to delete exam. Please try again.');
+    }
   };
 
   const features = [
@@ -173,14 +723,14 @@ const Dashboard = (): React.JSX.Element => {
           <div>
             <h1 className="text-3xl font-bold text-gray-800 mb-2">ExamScan Dashboard</h1>
             <p className="text-gray-600">
-              {teacher ? `Welcome back, ${teacher.first_name || teacher.username}!` : 'Manage your exams and scan answer sheets'}
+              {teacher ? `Welcome back, ${teacher.firstName || teacher.username}!` : 'Manage your exams and scan answer sheets'}
             </p>
           </div>
           <div className="flex items-center space-x-4">
             {teacher && (
               <div className="flex items-center space-x-2 text-gray-600">
-                <User size={20} />
-                <span className="text-sm">{teacher.first_name} {teacher.last_name}</span>
+                <UserIcon size={20} />
+                <span className="text-sm">{teacher.firstName} {teacher.lastName}</span>
               </div>
             )}
             <Button
@@ -192,13 +742,6 @@ const Dashboard = (): React.JSX.Element => {
               Logout
             </Button>
           </div>
-          <Link
-            to="/"
-            className="flex items-center text-blue-600 hover:text-blue-700 transition-colors"
-          >
-            <ArrowLeft size={20} className="mr-2" />
-            Back to Home
-          </Link>
         </div>
 
         {/* Quick Actions */}
@@ -293,19 +836,23 @@ const Dashboard = (): React.JSX.Element => {
               {exams.map((exam) => (
                 <div
                   key={exam.id}
-                  className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                  className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
                 >
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-3 mb-2">
-                      <h3 className="text-lg font-semibold text-gray-800">{exam.name}</h3>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <h3 className="text-base md:text-lg font-semibold text-gray-800 truncate max-w-full md:max-w-xs">
+                        {exam.name}
+                      </h3>
                       <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(exam.status)}`}>
                         {exam.status.charAt(0).toUpperCase() + exam.status.slice(1)}
                       </span>
                     </div>
                     {exam.description && (
-                      <p className="text-gray-600 text-sm mb-2">{exam.description}</p>
+                      <p className="text-gray-600 text-sm mb-2 line-clamp-2 md:line-clamp-3">
+                        {exam.description}
+                      </p>
                     )}
-                    <div className="flex items-center space-x-4 text-sm text-gray-500">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs md:text-sm text-gray-500">
                       <span className="flex items-center">
                         <FileText size={16} className="mr-1" />
                         {exam.questions} questions
@@ -321,16 +868,45 @@ const Dashboard = (): React.JSX.Element => {
                     </div>
                   </div>
 
-                  <div className="flex items-center space-x-2">
-                    <Button size="sm" variant="outline">
+                  <div className="flex flex-wrap justify-start md:justify-end gap-2">
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => handleViewExam(exam.id)}
+                    >
                       <Eye size={16} className="mr-1" />
                       View
                     </Button>
-                    <Button size="sm" variant="outline">
-                      <Download size={16} className="mr-1" />
-                      Export
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => navigate(`/generate?id=${exam.id}`)}
+                    >
+                      <FileText size={16} className="mr-1" />
+                      Edit
                     </Button>
-                    <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700">
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => handleDownloadExam(exam.id, exam.name)}
+                    >
+                      <Download size={16} className="mr-1" />
+                      Download
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => handlePrintExam(exam.id)}
+                    >
+                      <Printer size={16} className="mr-1" />
+                      Print
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      className="text-red-600 hover:text-red-700"
+                      onClick={() => handleDeleteExam(exam.id, exam.name)}
+                    >
                       <Trash2 size={16} />
                     </Button>
                   </div>

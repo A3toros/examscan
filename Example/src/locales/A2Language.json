@@ -1,0 +1,229 @@
+{
+  "lessons": {
+    "A2-L1": {
+      "title": "Describing People",
+      "description": "Learn to describe people's appearance and personality",
+      "warmup": {
+        "prompt": "Describe your best friend."
+      },
+      "vocabulary": {
+        "words": [
+          { "en": "tall", "th": "สูง", "audio": "tall.mp3" },
+          { "en": "short", "th": "เตี้ย", "audio": "short.mp3" },
+          { "en": "young", "th": "หนุ่ม/สาว", "audio": "young.mp3" },
+          { "en": "old", "th": "แก่", "audio": "old.mp3" },
+          { "en": "happy", "th": "มีความสุข", "audio": "happy.mp3" },
+          { "en": "kind", "th": "ใจดี", "audio": "kind.mp3" }
+        ],
+        "matching": [
+          { "word": "tall", "meanings": ["high height", "low height", "middle aged"], "correct": 0 },
+          { "word": "young", "meanings": ["not old", "very old", "medium height"], "correct": 0 },
+          { "word": "happy", "meanings": ["feeling good", "feeling sad", "very tall"], "correct": 0 }
+        ],
+        "fillBlanks": [
+          { "sentence": "He is ___.", "options": ["tall", "short", "happy"], "correct": 0 },
+          { "sentence": "She is very ___.", "options": ["kind", "tall", "young"], "correct": 0 }
+        ]
+      },
+      "grammar": {
+        "sentences": [
+          { "words": ["He", "is", "tall", "and", "young"], "correct": "He is tall and young." },
+          { "words": ["She", "is", "kind", "and", "happy"], "correct": "She is kind and happy." },
+          { "words": ["They", "are", "short", "but", "friendly"], "correct": "They are short but friendly." }
+        ]
+      },
+      "speaking": {
+        "prompts": ["Describe someone in your family. What do they look like?"],
+        "feedbackCriteria": {
+          "grammar": true,
+          "vocabulary": true,
+          "pronunciation": true
+        }
+      },
+      "reading": {
+        "text": "My brother is tall and young. He is 20 years old. He is kind and happy. My sister is short but very friendly. She is 18 years old. They both study at university.",
+        "similarityThreshold": 70
+      }
+    },
+    "A2-L2": {
+      "title": "Past Experiences",
+      "description": "Talk about things that happened in the past",
+      "warmup": {
+        "prompt": "What did you do last weekend?"
+      },
+      "vocabulary": {
+        "words": [
+          { "en": "yesterday", "th": "เมื่อวาน", "audio": "yesterday.mp3" },
+          { "en": "last week", "th": "สัปดาห์ที่แล้ว", "audio": "last_week.mp3" },
+          { "en": "visited", "th": "เยี่ยมเยือน", "audio": "visited.mp3" },
+          { "en": "played", "th": "เล่น", "audio": "played.mp3" },
+          { "en": "bought", "th": "ซื้อ", "audio": "bought.mp3" },
+          { "en": "saw", "th": "เห็น", "audio": "saw.mp3" }
+        ],
+        "matching": [
+          { "word": "yesterday", "meanings": ["one day ago", "one week ago", "tomorrow"], "correct": 0 },
+          { "word": "visited", "meanings": ["went to see someone", "bought something", "played a game"], "correct": 0 },
+          { "word": "bought", "meanings": ["purchased something", "saw something", "visited someone"], "correct": 0 }
+        ],
+        "fillBlanks": [
+          { "sentence": "I ___ my friend yesterday.", "options": ["visited", "play", "buy"], "correct": 0 },
+          { "sentence": "She ___ a new book.", "options": ["bought", "visited", "saw"], "correct": 0 }
+        ]
+      },
+      "grammar": {
+        "sentences": [
+          { "words": ["I", "visited", "my", "friend", "yesterday"], "correct": "I visited my friend yesterday." },
+          { "words": ["She", "bought", "a", "new", "dress"], "correct": "She bought a new dress." },
+          { "words": ["We", "played", "football", "last", "weekend"], "correct": "We played football last weekend." }
+        ]
+      },
+      "speaking": {
+        "prompts": ["Tell me about something you did last week. What did you do?"],
+        "feedbackCriteria": {
+          "grammar": true,
+          "vocabulary": true,
+          "pronunciation": true
+        }
+      },
+      "reading": {
+        "text": "Last weekend I visited my grandmother. She lives in Bangkok. I bought some fruit for her. We talked for a long time. It was very nice. What did you do last weekend?",
+        "similarityThreshold": 70
+      }
+    },
+    "A2-L3": {
+      "title": "School and Work",
+      "description": "Learn about school subjects and jobs",
+      "warmup": {
+        "prompt": "What is your favorite school subject?"
+      },
+      "vocabulary": {
+        "words": [
+          { "en": "teacher", "th": "ครู", "audio": "teacher.mp3" },
+          { "en": "student", "th": "นักเรียน", "audio": "student.mp3" },
+          { "en": "classroom", "th": "ห้องเรียน", "audio": "classroom.mp3" },
+          { "en": "lesson", "th": "บทเรียน", "audio": "lesson.mp3" },
+          { "en": "homework", "th": "การบ้าน", "audio": "homework.mp3" },
+          { "en": "doctor", "th": "หมอ", "audio": "doctor.mp3" }
+        ],
+        "matching": [
+          { "word": "teacher", "meanings": ["person who teaches", "person who learns", "place to study"], "correct": 0 },
+          { "word": "homework", "meanings": ["work done at home", "work done at school", "person who teaches"], "correct": 0 },
+          { "word": "doctor", "meanings": ["medical professional", "person who teaches", "person who learns"], "correct": 0 }
+        ],
+        "fillBlanks": [
+          { "sentence": "The ___ teaches math.", "options": ["teacher", "student", "doctor"], "correct": 0 },
+          { "sentence": "I do my ___ every day.", "options": ["homework", "teacher", "classroom"], "correct": 0 }
+        ]
+      },
+      "grammar": {
+        "sentences": [
+          { "words": ["The", "teacher", "is", "in", "the", "classroom"], "correct": "The teacher is in the classroom." },
+          { "words": ["I", "do", "my", "homework", "every", "day"], "correct": "I do my homework every day." },
+          { "words": ["She", "wants", "to", "be", "a", "doctor"], "correct": "She wants to be a doctor." }
+        ]
+      },
+      "speaking": {
+        "prompts": ["What do you want to be when you grow up? Why?"],
+        "feedbackCriteria": {
+          "grammar": true,
+          "vocabulary": true,
+          "pronunciation": true
+        }
+      },
+      "reading": {
+        "text": "I go to school every day. My favorite subject is English. The teacher is very nice. I do homework after school. I want to be a doctor when I grow up. Doctors help people.",
+        "similarityThreshold": 70
+      }
+    },
+    "A2-L4": {
+      "title": "Travel and Transportation",
+      "description": "Learn about different ways to travel",
+      "warmup": {
+        "prompt": "How do you usually travel to school?"
+      },
+      "vocabulary": {
+        "words": [
+          { "en": "car", "th": "รถยนต์", "audio": "car.mp3" },
+          { "en": "bus", "th": "รถบัส", "audio": "bus.mp3" },
+          { "en": "train", "th": "รถไฟ", "audio": "train.mp3" },
+          { "en": "plane", "th": "เครื่องบิน", "audio": "plane.mp3" },
+          { "en": "walk", "th": "เดิน", "audio": "walk.mp3" },
+          { "en": "ticket", "th": "ตั๋ว", "audio": "ticket.mp3" }
+        ],
+        "matching": [
+          { "word": "bus", "meanings": ["public transport vehicle", "private vehicle", "flying vehicle"], "correct": 0 },
+          { "word": "plane", "meanings": ["flies in sky", "drives on road", "moves on rails"], "correct": 0 },
+          { "word": "ticket", "meanings": ["travel permit", "vehicle", "walking"], "correct": 0 }
+        ],
+        "fillBlanks": [
+          { "sentence": "I go to school by ___.", "options": ["bus", "plane", "ticket"], "correct": 0 },
+          { "sentence": "She travels by ___ to Bangkok.", "options": ["train", "walk", "car"], "correct": 0 }
+        ]
+      },
+      "grammar": {
+        "sentences": [
+          { "words": ["I", "go", "to", "school", "by", "bus"], "correct": "I go to school by bus." },
+          { "words": ["She", "travels", "by", "train"], "correct": "She travels by train." },
+          { "words": ["They", "walk", "to", "the", "park"], "correct": "They walk to the park." }
+        ]
+      },
+      "speaking": {
+        "prompts": ["How do you get to school? What is your favorite way to travel?"],
+        "feedbackCriteria": {
+          "grammar": true,
+          "vocabulary": true,
+          "pronunciation": true
+        }
+      },
+      "reading": {
+        "text": "I go to school by bus. The bus is fast and comfortable. My mother drives a car to work. Sometimes we travel by train. Planes are for long trips. Walking is good for short distances.",
+        "similarityThreshold": 70
+      }
+    },
+    "A2-L5": {
+      "title": "Health and Feelings",
+      "description": "Learn to talk about health and emotions",
+      "warmup": {
+        "prompt": "How do you feel today?"
+      },
+      "vocabulary": {
+        "words": [
+          { "en": "sick", "th": "ป่วย", "audio": "sick.mp3" },
+          { "en": "tired", "th": "เหนื่อย", "audio": "tired.mp3" },
+          { "en": "hungry", "th": "หิว", "audio": "hungry.mp3" },
+          { "en": "happy", "th": "มีความสุข", "audio": "happy.mp3" },
+          { "en": "sad", "th": "เศร้า", "audio": "sad.mp3" },
+          { "en": "angry", "th": "โกรธ", "audio": "angry.mp3" }
+        ],
+        "matching": [
+          { "word": "sick", "meanings": ["not feeling well", "feeling tired", "feeling hungry"], "correct": 0 },
+          { "word": "happy", "meanings": ["feeling good", "feeling bad", "feeling tired"], "correct": 0 },
+          { "word": "tired", "meanings": ["needing rest", "feeling sick", "feeling hungry"], "correct": 0 }
+        ],
+        "fillBlanks": [
+          { "sentence": "I feel ___ today.", "options": ["happy", "sick", "hungry"], "correct": 0 },
+          { "sentence": "She is very ___.", "options": ["tired", "happy", "angry"], "correct": 0 }
+        ]
+      },
+      "grammar": {
+        "sentences": [
+          { "words": ["I", "feel", "happy", "today"], "correct": "I feel happy today." },
+          { "words": ["She", "is", "very", "tired"], "correct": "She is very tired." },
+          { "words": ["He", "looks", "sad", "now"], "correct": "He looks sad now." }
+        ]
+      },
+      "speaking": {
+        "prompts": ["How do you feel right now? Are you happy or tired?"],
+        "feedbackCriteria": {
+          "grammar": true,
+          "vocabulary": true,
+          "pronunciation": true
+        }
+      },
+      "reading": {
+        "text": "I feel happy today. School was fun. My friend is sick. She has a cold. She stays home. I am tired after school. I eat dinner and sleep. How do you feel?",
+        "similarityThreshold": 70
+      }
+    }
+  }
+}

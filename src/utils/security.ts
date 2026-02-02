@@ -300,7 +300,7 @@ export const useSecureForm = () => {
     }));
   }, []);
 
-  const validateForm = React.useCallback((validationRules: Record<string, (value: any) => string | null>) => {
+  const validateForm = React.useCallback((validationRules: Record<string, (_value: any) => string | null>) => {
     const newErrors: Record<string, string> = {};
     let isValid = true;
 
@@ -513,11 +513,16 @@ export const validateCSRFToken = (token: string, storedToken: string): boolean =
  */
 class RateLimiter {
   private attempts: Map<string, { count: number; resetTime: number }> = new Map();
+  private maxAttempts: number;
+  private windowMs: number;
 
   constructor(
-    private maxAttempts: number = 5,
-    private windowMs: number = 15 * 60 * 1000 // 15 minutes
-  ) {}
+    maxAttempts: number = 5,
+    windowMs: number = 15 * 60 * 1000 // 15 minutes
+  ) {
+    this.maxAttempts = maxAttempts;
+    this.windowMs = windowMs;
+  }
 
   isAllowed(key: string): boolean {
     const now = Date.now();
@@ -617,10 +622,13 @@ export const useInputValidation = (initialValue: string = '') => {
  * Generate secure random string
  */
 export const generateSecureToken = (length: number = 32): string => {
+  // Use crypto API in the browser (CSPRNG)
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
   let result = '';
   for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+    result += chars[bytes[i] % chars.length];
   }
   return result;
 };
@@ -628,7 +636,7 @@ export const generateSecureToken = (length: number = 32): string => {
 /**
  * Check if request is from a suspicious source
  */
-export const isSuspiciousRequest = (userAgent: string, ip: string): boolean => {
+export const isSuspiciousRequest = (userAgent: string, _ip: string): boolean => {
   // Check for suspicious user agent patterns
   if (isSuspiciousUserAgent(userAgent)) {
     return true;

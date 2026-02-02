@@ -1,0 +1,105 @@
+[build]
+  command = "npm run build"
+  functions = "functions"
+  publish = ".next"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+[dev]
+  functions = "functions"
+  publish = "out"
+  port = 8888
+  targetPort = 3000
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Redirect API routes to functions
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+# SPA fallback for client-side routing (handled by Netlify Next.js plugin)
+# [[redirects]]
+#   from = "/*"
+#   to = "/index.html"
+#   status = 200
+
+# Security headers
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Prevent clickjacking
+    X-Frame-Options = "DENY"
+    
+    # Prevent MIME type sniffing
+    X-Content-Type-Options = "nosniff"
+    
+    # Enable XSS protection
+    X-XSS-Protection = "1; mode=block"
+    
+    # Force HTTPS (1 year, include subdomains)
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
+    
+    # Referrer Policy
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    
+    # Content Security Policy - balanced for Next.js app
+    # Allows necessary resources while maintaining security
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; connect-src 'self' https: wss: ws:; font-src 'self' data: https:; media-src 'self' blob: data:; worker-src 'self' blob:;"
+    
+    # Permissions Policy
+    Permissions-Policy = "camera=(), microphone=*, geolocation=(), payment=()"
+
+[[headers]]
+  for = "/.netlify/functions/*"
+  [headers.values]
+    # CORS is handled per-function with specific origins
+    # Security headers are added by functions
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
+
+# Cache static images (PNG, WebP) for 1 year
+# Matches PNG files in any directory
+[[headers]]
+  for = "/*.png"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+    # Enable stale-while-revalidate for better performance
+    # Browser can serve stale content while revalidating in background
+    X-Cache-Control = "public, max-age=31536000, stale-while-revalidate=86400"
+
+# Matches WebP files in any directory
+[[headers]]
+  for = "/*.webp"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+    X-Cache-Control = "public, max-age=31536000, stale-while-revalidate=86400"
+
+# Cache Mascot JSON animation files for 1 year
+# Matches mascot.json and mascot-thinking.json in root or any directory
+[[headers]]
+  for = "/mascot*.json"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+    Content-Type = "application/json"
+    X-Cache-Control = "public, max-age=31536000, stale-while-revalidate=86400"
+
+# Cache favicon files for 1 year
+[[headers]]
+  for = "/favicon/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+    X-Cache-Control = "public, max-age=31536000, stale-while-revalidate=86400"
+
+# Cache ICO files for 1 year
+[[headers]]
+  for = "/*.ico"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+    X-Cache-Control = "public, max-age=31536000, stale-while-revalidate=86400"

@@ -1,77 +1,292 @@
 /**
- * Authentication utilities for secure token management with cookies
+ * Authentication utilities for HTTP-only cookie-based authentication
+ * 
+ * Since cookies are HTTP-only, we can't access them directly from JavaScript.
+ * We use the /api/auth-me endpoint to get the current user.
  */
 
-interface AuthTokens {
-  token: string;
-  user: any;
+// Always use relative paths in development to avoid CORS issues
+// In production builds, can use absolute URL if needed
+const getApiBaseUrl = () => {
+  const isDev = import.meta.env.DEV;
+  
+  // In development, always use relative path (works with Netlify Dev)
+  if (isDev) {
+    return '/.netlify/functions';
+  }
+  
+  // In production, check if VITE_API_URL is set
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl && (envUrl.startsWith('http://') || envUrl.startsWith('https://'))) {
+    return envUrl.replace(/\/$/, ''); // Remove trailing slash
+  }
+  
+  // Default to relative path (works for both dev and production when deployed)
+  return '/.netlify/functions';
+};
+
+const API_BASE_URL = getApiBaseUrl();
+
+export interface User {
+  id: number;
+  email: string;
+  username: string;
+  firstName: string;
+  lastName: string;
+  role: string;
+  createdAt: string;
+  lastLogin: string | null;
+  emailVerified: boolean;
+}
+
+export interface AuthResponse {
+  success: boolean;
+  user?: User;
+  error?: string;
 }
 
 /**
- * Set authentication tokens in secure cookies
+ * Get current user from server (cookies are HTTP-only, so we fetch from API)
  */
-export const setAuthCookies = (tokens: AuthTokens): void => {
-  const expires = new Date();
-  expires.setTime(expires.getTime() + (24 * 60 * 60 * 1000)); // 24 hours
-
-  // Set secure, httpOnly-like cookies (since we can't set httpOnly from client-side,
-  // we use secure cookies with SameSite protection)
-  document.cookie = `examscan_token=${tokens.token}; expires=${expires.toUTCString()}; path=/; Secure; SameSite=Strict`;
-  document.cookie = `examscan_user=${encodeURIComponent(JSON.stringify(tokens.user))}; expires=${expires.toUTCString()}; path=/; Secure; SameSite=Strict`;
-};
-
-/**
- * Get authentication tokens from cookies
- */
-export const getAuthCookies = (): AuthTokens | null => {
-  const cookies = document.cookie.split(';').reduce((acc, cookie) => {
-    const [key, value] = cookie.trim().split('=');
-    acc[key] = value;
-    return acc;
-  }, {} as Record<string, string>);
-
-  const token = cookies.examscan_token;
-  const userJson = cookies.examscan_user;
-
-  if (!token || !userJson) {
-    return null;
-  }
-
+export async function getCurrentUser(): Promise<User | null> {
   try {
-    const user = JSON.parse(decodeURIComponent(userJson));
-    return { token, user };
-  } catch {
+    const baseUrl = API_BASE_URL.replace(/\/$/, '');
+    const response = await fetch(`${baseUrl}/auth-me`, {
+      method: 'GET',
+      credentials: 'include', // Important: sends cookies
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data: AuthResponse = await response.json();
+    return data.user || null;
+  } catch (error) {
+    console.error('Error fetching current user:', error);
     return null;
   }
-};
-
-/**
- * Clear authentication cookies
- */
-export const clearAuthCookies = (): void => {
-  document.cookie = 'examscan_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; Secure; SameSite=Strict';
-  document.cookie = 'examscan_user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; Secure; SameSite=Strict';
-};
+}
 
 /**
  * Check if user is authenticated
  */
-export const isAuthenticated = (): boolean => {
-  return getAuthCookies() !== null;
-};
+export async function isAuthenticated(): Promise<boolean> {
+  const user = await getCurrentUser();
+  return user !== null;
+}
 
 /**
- * Get current user from cookies
+ * Check if user is admin
  */
-export const getCurrentUser = (): any => {
-  const auth = getAuthCookies();
-  return auth?.user || null;
-};
+export async function isAdmin(): Promise<boolean> {
+  const user = await getCurrentUser();
+  return user?.role === 'admin' || false;
+}
 
 /**
- * Get current token from cookies
+ * Login with password
  */
-export const getCurrentToken = (): string | null => {
-  const auth = getAuthCookies();
-  return auth?.token || null;
-};
+export async function loginWithPassword(
+  username: string,
+  password: string
+): Promise<{ success: boolean; user?: User; error?: string }> {
+  try {
+    const baseUrl = API_BASE_URL.replace(/\/$/, '');
+    const response = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      credentials: 'include', // Important: receives cookies
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ username, password }),
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Login error:', error);
+    return { success: false, error: 'Login failed' };
+  }
+}
+
+/**
+ * Send OTP for signup/password reset (OTP not used for login - use password login instead)
+ */
+export async function sendOTP(
+  email: string,
+  type: 'signup' | 'password_reset'
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    // Ensure no double slashes in URL
+    const baseUrl = API_BASE_URL.replace(/\/$/, '');
+    const url = `${baseUrl}/send-otp`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, type }),
+    });
+
+    if (!response.ok) {
+      let errorMessage = 'Failed to send OTP';
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || errorMessage;
+      } catch {
+        errorMessage = `Server error: ${response.status} ${response.statusText}`;
+      }
+      return { success: false, error: errorMessage };
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error: any) {
+    console.error('Send OTP error:', error);
+    // Handle network errors (server not running, CORS, etc.)
+    if (error instanceof TypeError) {
+      const isDev = import.meta.env.DEV;
+      const errorMsg = isDev 
+        ? 'Cannot connect to server. Make sure Netlify Dev is running (run: netlify dev)'
+        : 'Network error. Please check your connection.';
+      return { success: false, error: errorMsg };
+    }
+    return { success: false, error: error.message || 'Failed to send OTP' };
+  }
+}
+
+/**
+ * Verify OTP and complete authentication (for signup/password reset only)
+ */
+export async function verifyOTP(
+  email: string,
+  code: string,
+  type: 'signup' | 'password_reset',
+  userData?: {
+    firstName?: string;
+    lastName?: string;
+    username?: string;
+    password?: string;
+  }
+): Promise<{ success: boolean; user?: User; error?: string }> {
+  try {
+    const body: any = { email, code, type };
+    if (userData) {
+      Object.assign(body, userData);
+    }
+
+    const baseUrl = API_BASE_URL.replace(/\/$/, '');
+    const response = await fetch(`${baseUrl}/verify-otp`, {
+      method: 'POST',
+      credentials: 'include', // Important: receives cookies
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Verify OTP error:', error);
+    return { success: false, error: 'Failed to verify OTP' };
+  }
+}
+
+/**
+ * Logout
+ */
+export async function logout(): Promise<{ success: boolean; error?: string }> {
+  try {
+    const baseUrl = API_BASE_URL.replace(/\/$/, '');
+    const response = await fetch(`${baseUrl}/logout`, {
+      method: 'POST',
+      credentials: 'include', // Important: sends cookies
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Logout error:', error);
+    return { success: false, error: 'Logout failed' };
+  }
+}
+
+/**
+ * Reset password with OTP
+ */
+export async function resetPassword(
+  email: string,
+  code: string,
+  newPassword: string
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const baseUrl = API_BASE_URL.replace(/\/$/, '');
+    const response = await fetch(`${baseUrl}/auth-reset-password`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, code, newPassword }),
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Reset password error:', error);
+    return { success: false, error: 'Failed to reset password' };
+  }
+}
+
+/**
+ * Change password (authenticated user)
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const baseUrl = API_BASE_URL.replace(/\/$/, '');
+    const response = await fetch(`${baseUrl}/auth-change-password`, {
+      method: 'POST',
+      credentials: 'include', // Important: sends cookies
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Change password error:', error);
+    return { success: false, error: 'Failed to change password' };
+  }
+}
+
+/**
+ * Make authenticated API request
+ */
+export async function authenticatedFetch(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  return fetch(url, {
+    ...options,
+    credentials: 'include', // Important: sends cookies
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
+}

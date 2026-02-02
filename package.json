@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "netlify dev",
+    "dev:vite": "vite",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -14,9 +15,11 @@
     "netlify:deploy:prod": "netlify deploy --prod"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
     "@supabase/supabase-js": "^2.88.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",
+    "@upstash/redis": "^1.36.1",
     "bcryptjs": "^2.4.3",
     "docx": "^9.5.1",
     "framer-motion": "^12.23.26",

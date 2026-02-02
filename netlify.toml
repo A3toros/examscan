@@ -23,20 +23,23 @@
     X-XSS-Protection = "1; mode=block"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    # Allow camera for this first-party app (needed for answer sheet scanning)
+    # Keep microphone and geolocation disabled by default
+    Permissions-Policy = "camera=*, microphone=(), geolocation=()"
 
 [[headers]]
   for = "/.netlify/functions/*"
   [headers.values]
-    Access-Control-Allow-Origin = "*"
-    Access-Control-Allow-Headers = "Content-Type, Authorization"
-    Access-Control-Allow-Methods = "GET, POST, PUT, DELETE, OPTIONS"
+    # IMPORTANT:
+    # Do NOT set static CORS headers here, because our auth uses HttpOnly cookies
+    # and requires dynamic per-request origins + Access-Control-Allow-Credentials.
+    # CORS is handled inside each Netlify Function via `functions/utils/cors-headers.ts`.
 
 [functions]
   directory = "functions"
 
 [dev]
-  command = "npm run dev"
+  command = "vite"
   port = 5174
   publish = "dist"
   functions = "functions"

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Trash2, Save, Download, Printer, Settings, ChevronDown, ChevronUp, Minus } from 'lucide-react';
 import Button from '../ui/Button';
@@ -6,12 +6,15 @@ import Card from '../ui/Card';
 import Modal from '../ui/Modal';
 import jsPDF from 'jspdf';
 import { Document, Packer, Paragraph, TextRun, Table, TableCell, TableRow, WidthType } from 'docx';
-import { getCurrentToken } from '../../utils/auth';
+import { authenticatedFetch } from '../../utils/auth';
+import { BUBBLE_SPACING_MM, getOptionOffsets } from '../../utils/pdfLayout';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 interface TestSection {
   id: string;
   type: 'mc' | 'tf';
   count: number;
+  options?: number; // Number of options for MC questions (2-4), default 4
 }
 
 interface StudentInfo {
@@ -32,6 +35,9 @@ interface ExamForm {
 }
 
 function AnswerSheetGenerator() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [examId, setExamId] = useState<number | null>(null);
   const [exam, setExam] = useState<ExamForm>({
     name: '',
     description: '',
@@ -40,9 +46,9 @@ function AnswerSheetGenerator() {
     studentInfo: {
       name: true,
       last_name: true,
-      nickname: false,
+      nickname: true,
       class: true,
-      student_id: false,
+      student_id: true,
       student_id_digits: 6
     }
   });
@@ -51,12 +57,109 @@ function AnswerSheetGenerator() {
   const [isSaving, setIsSaving] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
 
+  // Load existing exam for editing if ?id= is present
+  useEffect(() => {
+    const idParam = searchParams.get('id') || searchParams.get('examId');
+    if (!idParam) return;
+
+    const id = parseInt(idParam, 10);
+    if (!Number.isFinite(id) || id <= 0) return;
+
+    const loadExamForEdit = async () => {
+      try {
+        const response = await authenticatedFetch(`/.netlify/functions/exams?id=${id}`);
+        if (!response.ok) {
+          console.error('Failed to load exam for editing', await response.text());
+          return;
+        }
+
+        const data = await response.json();
+        if (!data.exam) return;
+
+        const examData = data.exam;
+
+        const dbTestStructure = typeof examData.test_structure === 'string'
+          ? JSON.parse(examData.test_structure)
+          : examData.test_structure || [];
+
+        console.log('[ExamEdit][db] test_structure raw', {
+          examId: examData.id,
+          examName: examData.exam_name || examData.title,
+          testStructure: dbTestStructure,
+        });
+
+        const mappedTestStructure: TestSection[] = Array.isArray(dbTestStructure)
+          ? dbTestStructure.map((section: any, index: number) => {
+              const type = section.type === 'tf' ? 'tf' : 'mc';
+              const rawOptions = Number(section.options);
+              const safeOptions = Number.isFinite(rawOptions)
+                ? Math.min(4, Math.max(2, rawOptions))
+                : 4;
+              return {
+                id: section.id || `section-${index + 1}`,
+                type,
+                count: Number(section.count) || 0,
+                options: type === 'mc' ? safeOptions : undefined,
+              };
+            })
+          : [];
+
+        console.log('[ExamEdit][db] test_structure normalized', {
+          examId: examData.id,
+          examName: examData.exam_name || examData.title,
+          testStructure: mappedTestStructure.map((section) => ({
+            type: section.type,
+            count: section.count,
+            options: section.options,
+          }))
+        });
+
+        const dbAnswerKey = typeof examData.answer_key === 'string'
+          ? JSON.parse(examData.answer_key)
+          : examData.answer_key || {};
+
+        const dbStudentInfo = examData.student_info && typeof examData.student_info === 'string'
+          ? JSON.parse(examData.student_info)
+          : examData.student_info || {};
+
+        setExam({
+          name: examData.exam_name || examData.title || '',
+          description: examData.description || '',
+          testStructure: mappedTestStructure,
+          answerKey: dbAnswerKey,
+          studentInfo: {
+            name: dbStudentInfo.name ?? true,
+            last_name: dbStudentInfo.last_name ?? true,
+            nickname: dbStudentInfo.nickname ?? false,
+            class: dbStudentInfo.class ?? true,
+            student_id: dbStudentInfo.student_id ?? false,
+            student_id_digits: dbStudentInfo.student_id_digits ?? 6,
+          },
+        });
+
+        setExamId(id);
+        setExpandedSections(new Set(mappedTestStructure.map(s => s.id)));
+      } catch (error) {
+        console.error('Error loading exam for edit:', error);
+      }
+    };
+
+    loadExamForEdit();
+  }, [searchParams]);
+
+  // Helper function to generate option labels (A-F)
+  const getOptionLabels = (count: number): string[] => {
+    const safeCount = Math.min(4, Math.max(2, count));
+    return Array.from({ length: safeCount }, (_, i) => String.fromCharCode(65 + i)); // A, B, C, D
+  };
+
   // Add a new test section
   const addTestSection = (type: 'mc' | 'tf') => {
     const newSection: TestSection = {
       id: `section-${Date.now()}`,
       type,
-      count: 5 // Default count
+      count: 5, // Default count
+      options: type === 'mc' ? 4 : undefined // Default 4 options for MC
     };
 
     setExam(prev => ({
@@ -77,6 +180,38 @@ function AnswerSheetGenerator() {
       testStructure: prev.testStructure.map(section =>
         section.id === sectionId ? { ...section, count } : section
       )
+    }));
+  };
+
+  // Update section options (for MC questions)
+  const updateSectionOptions = (sectionId: string, options: number) => {
+    if (options < 2 || options > 4) return; // Valid range: 2-4
+
+    setExam(prev => ({
+      ...prev,
+      testStructure: prev.testStructure.map(section =>
+        section.id === sectionId ? { ...section, options } : section
+      ),
+      // Clear answer keys for questions in this section if options changed
+      answerKey: (() => {
+        const updatedAnswerKey = { ...prev.answerKey };
+        const sectionIndex = prev.testStructure.findIndex(s => s.id === sectionId);
+        if (sectionIndex === -1) return updatedAnswerKey;
+        
+        const { start } = getQuestionRange(sectionIndex);
+        const section = prev.testStructure[sectionIndex];
+        const newLabels = getOptionLabels(options);
+        
+        // Remove answers that are no longer valid
+        for (let i = 0; i < section.count; i++) {
+          const qNum = start + i;
+          if (updatedAnswerKey[qNum] && !newLabels.includes(updatedAnswerKey[qNum])) {
+            delete updatedAnswerKey[qNum];
+          }
+        }
+        
+        return updatedAnswerKey;
+      })()
     }));
   };
 
@@ -205,57 +340,366 @@ function AnswerSheetGenerator() {
     setIsSaving(true);
 
     try {
-      const token = getCurrentToken();
-      if (!token) {
-        alert('Please log in first');
-        return;
-      }
+      const payload = {
+        name: exam.name,
+        description: exam.description,
+        testStructure: exam.testStructure.map(section => ({
+          type: section.type,
+          count: section.count,
+          options: section.type === 'mc'
+            ? Math.min(4, Math.max(2, Number(section.options) || 4))
+            : undefined,
+        })),
+        answerKey: exam.answerKey,
+        studentInfo: exam.studentInfo,
+        ...(examId ? { id: examId } : {}),
+      };
 
-      const response = await fetch('/.netlify/functions/exams', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          name: exam.name,
-          description: exam.description,
-          testStructure: exam.testStructure.map(section => ({
-            type: section.type,
-            count: section.count
-          })),
-          answerKey: exam.answerKey,
-          studentInfo: exam.studentInfo
-        })
+      const response = await authenticatedFetch('/.netlify/functions/exams', {
+        method: examId ? 'PUT' : 'POST',
+        body: JSON.stringify(payload),
       });
 
       if (response.ok) {
-        alert('Exam saved successfully!');
-        // Reset form
-        setExam({
-          name: '',
-          description: '',
-          testStructure: [],
-          answerKey: {},
-          studentInfo: {
-            name: true,
-            last_name: true,
-            nickname: false,
-            class: true,
-            student_id: false,
-            student_id_digits: 6
-          }
-        });
-        setExpandedSections(new Set());
+        alert(examId ? 'Exam updated successfully!' : 'Exam saved successfully!');
+
+        // After saving, always go back to dashboard
+        navigate('/dashboard');
+
+        // For new exams we still reset local state in case user navigates back here via history
+        if (!examId) {
+          setExam({
+            name: '',
+            description: '',
+            testStructure: [],
+            answerKey: {},
+            studentInfo: {
+              name: true,
+              last_name: true,
+              nickname: true,
+              class: true,
+              student_id: true,
+              student_id_digits: 6,
+            },
+          });
+          setExpandedSections(new Set());
+        }
+      } else if (response.status === 401) {
+        alert('Session expired. Please log in again.');
+        window.location.href = '/login';
       } else {
-        const errorData = await response.json();
-        alert(`Failed to save exam: ${errorData.error || 'Unknown error'}`);
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.details 
+          ? `${errorData.error || 'Failed to save exam'}: ${errorData.details}`
+          : errorData.error || 'Unknown error';
+        console.error('Save exam error:', errorData);
+        alert(`Failed to save exam: ${errorMessage}`);
       }
     } catch (error) {
       console.error('Error saving exam:', error);
-      alert('Failed to save exam. Please try again.');
+      const errorMsg = error instanceof TypeError && error.message === 'Failed to fetch'
+        ? 'Network error. Please check your connection or make sure the server is running.'
+        : 'Failed to save exam. Please try again.';
+      alert(errorMsg);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const generatePDFDoc = async () => {
+    const pdf = new jsPDF();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const topMargin = 30;
+    const bottomMargin = 20;
+    const margin = 20;
+
+    try {
+      const drawCornerMarkers = (doc: jsPDF) => {
+        const markerSize = 12; // Size of outer square (mm)
+        const innerInset = 2;
+        const innerInset2 = 4;
+        const drawMarker = (x: number, y: number) => {
+          doc.setFillColor(0, 0, 0);
+          doc.rect(x, y, markerSize, markerSize, 'F');
+          doc.setFillColor(255, 255, 255);
+          doc.rect(x + innerInset, y + innerInset, markerSize - innerInset * 2, markerSize - innerInset * 2, 'F');
+          doc.setFillColor(0, 0, 0);
+          doc.rect(x + innerInset2, y + innerInset2, markerSize - innerInset2 * 2, markerSize - innerInset2 * 2, 'F');
+        };
+
+        const markerMargin = 5;
+        drawMarker(markerMargin, markerMargin);
+        drawMarker(pageWidth - markerMargin - markerSize, markerMargin);
+        drawMarker(markerMargin, pageHeight - markerMargin - markerSize);
+        drawMarker(pageWidth - markerMargin - markerSize, pageHeight - markerMargin - markerSize);
+      };
+
+      // Set up the document (match dashboard header)
+      drawCornerMarkers(pdf);
+      pdf.setFontSize(16);
+      pdf.text(exam.name || 'Untitled Exam', 20, 18);
+
+      if (exam.description) {
+        pdf.setFontSize(9);
+        pdf.text(exam.description, 20, 26);
+      }
+
+      let yPosition = 34;
+
+      // Student Information - all fields on one line
+      const studentFields = [];
+      if (exam.studentInfo.name) studentFields.push('Name: _______________');
+      if (exam.studentInfo.last_name) studentFields.push('Last Name: _______________');
+      if (exam.studentInfo.nickname) studentFields.push('Nickname: _______________');
+      if (exam.studentInfo.class) studentFields.push('Class: _______________');
+
+      if (studentFields.length > 0) {
+        pdf.setFontSize(9);
+        pdf.text(studentFields.join('  |  '), 20, yPosition);
+        yPosition += 10;
+      }
+
+      // Student ID Section
+      if (exam.studentInfo.student_id) {
+        pdf.setFontSize(9);
+        pdf.text('Student ID:', 20, yPosition);
+        yPosition += 8;
+
+        // Draw student ID grids (match example digit size/spacing)
+        const squareWidth = 5.5;
+        const squareHeight = 7;
+        const squaresPerRow = 10;
+        const squareSpacing = 1;
+        const startX = 20; // Match Dashboard.tsx
+
+        for (let i = 0; i < exam.studentInfo.student_id_digits; i++) {
+          const row = Math.floor(i / squaresPerRow);
+          const col = i % squaresPerRow;
+          const x = startX + (col * (squareWidth + squareSpacing));
+          const y = yPosition + (row * (squareHeight + squareSpacing + 5));
+
+          // "Digital 8" style guide only (no outer box)
+          pdf.setDrawColor(200, 200, 200);
+          pdf.setLineWidth(0.3);
+
+          const px = x;
+          const py = y;
+          const w = squareWidth;
+          const h = squareHeight;
+
+          const inset = 0.8;
+          const gap = 0.15; // match example digit spacing
+          const topY = py + inset;
+          const upperMidY = py + h / 3;
+          const centerY = py + h / 2;
+          const lowerMidY = py + (2 * h) / 3;
+          const bottomY = py + h - inset;
+
+          const leftX = px + inset;
+          const innerLeftX = px + w / 3;
+          const innerRightX = px + (2 * w) / 3;
+          const rightX = px + w - inset;
+
+          // Horizontal segments (like digital 8)
+          pdf.line(innerLeftX + gap, topY, innerRightX - gap, topY);           // top
+          pdf.line(innerLeftX + gap, centerY, innerRightX - gap, centerY);     // middle
+          pdf.line(innerLeftX + gap, bottomY, innerRightX - gap, bottomY);     // bottom
+
+          // Vertical segments (upper)
+          pdf.line(leftX, topY + gap, leftX, upperMidY - gap);                 // upper-left
+          pdf.line(rightX, topY + gap, rightX, upperMidY - gap);               // upper-right
+
+          // Vertical segments (lower)
+          pdf.line(leftX, lowerMidY + gap, leftX, bottomY - gap);              // lower-left
+          pdf.line(rightX, lowerMidY + gap, rightX, bottomY - gap);            // lower-right
+
+          // No position numbers below grids
+        }
+
+        yPosition += Math.ceil(exam.studentInfo.student_id_digits / squaresPerRow) * (squareHeight + squareSpacing + 6) + 4;
+
+        // Ensure we have room for the examples, otherwise move to a new page
+        if (yPosition > pageHeight - bottomMargin - 40) {
+          pdf.addPage();
+          drawCornerMarkers(pdf);
+          yPosition = topMargin;
+        }
+
+        // Digital number examples (0–9) using the same "digital 8" style grid
+        pdf.setFontSize(8);
+        pdf.text('Example digits (digital style):', 20, yPosition);
+        yPosition += 5;
+
+        const digitWidth = 4.5;  // Smaller example
+        const digitHeight = 6;
+        const digitSpacing = 2.5;
+        const legendStartX = 20;
+        const legendY = yPosition;
+
+        // Segment map for 7-seg style digits (A, B, C, D, E, F, G)
+        const digitSegments: Record<number, string[]> = {
+          0: ['A', 'B', 'C', 'E', 'F', 'G'],
+          1: ['B', 'C'],
+          2: ['A', 'B', 'D', 'E', 'G'],
+          3: ['A', 'B', 'C', 'D', 'G'],
+          4: ['B', 'C', 'D', 'F'],
+          5: ['A', 'C', 'D', 'F', 'G'],
+          6: ['A', 'C', 'D', 'E', 'F', 'G'],
+          7: ['A', 'B', 'C'],
+          8: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+          9: ['A', 'B', 'C', 'D', 'F', 'G'],
+        };
+
+        for (let d = 0; d <= 9; d++) {
+          const x = legendStartX + d * (digitWidth + digitSpacing);
+          const y = legendY;
+
+          const px = x;
+          const py = y;
+          const w = digitWidth;
+          const h = digitHeight;
+
+          const inset = 0.8;
+          const gap = 0.15; // segments nearly touch but don't overlap
+          const topY = py + inset;
+          const centerY = py + h / 2;
+          const bottomY = py + h - inset;
+
+          const leftX = px + inset;
+          const innerLeftX = px + w / 3;
+          const innerRightX = px + (2 * w) / 3;
+          const rightX = px + w - inset;
+
+          const active = new Set(digitSegments[d] || []);
+
+          pdf.setDrawColor(0, 0, 0); // Black for visibility
+          pdf.setLineWidth(0.3);
+
+          // Horizontals: A (top), D (middle), G (bottom)
+          if (active.has('A')) {
+            pdf.line(innerLeftX + gap, topY, innerRightX - gap, topY);
+          }
+          if (active.has('D')) {
+            pdf.line(innerLeftX + gap, centerY, innerRightX - gap, centerY);
+          }
+          if (active.has('G')) {
+            pdf.line(innerLeftX + gap, bottomY, innerRightX - gap, bottomY);
+          }
+
+          // Verticals: F (upper-left), B (upper-right), E (lower-left), C (lower-right)
+          const upperMidY = py + h / 3;
+          const lowerMidY = py + (2 * h) / 3;
+
+          if (active.has('F')) {
+            pdf.line(leftX, topY + gap, leftX, upperMidY - gap);
+          }
+          if (active.has('B')) {
+            pdf.line(rightX, topY + gap, rightX, upperMidY - gap);
+          }
+          if (active.has('E')) {
+            pdf.line(leftX, lowerMidY + gap, leftX, bottomY - gap);
+          }
+          if (active.has('C')) {
+            pdf.line(rightX, lowerMidY + gap, rightX, bottomY - gap);
+          }
+
+          // No numeric labels under example digits
+        }
+
+        yPosition += digitHeight + 6;
+      }
+
+      // Compact instructions (match dashboard)
+      pdf.setFontSize(9);
+      pdf.text('Instructions: Fill bubbles completely • Keep marks within circles • Erase completely to change', 20, yPosition);
+      yPosition += 6;
+
+      // Start marker to help CV align the first row of bubbles
+      const startMarkerY = yPosition + 2;
+      pdf.setDrawColor(0, 0, 0);
+      pdf.setLineWidth(0.6);
+      pdf.line(20, startMarkerY, pageWidth - 20, startMarkerY);
+      pdf.setFontSize(8);
+      pdf.text('START', 20, startMarkerY - 2);
+      yPosition += 8;
+      let questionNumber = 1;
+
+      // Generate answer bubbles for each test section (match dashboard layout)
+      exam.testStructure.forEach((section) => {
+        // Section header
+        if (yPosition > pageHeight - margin - 40) {
+          pdf.addPage();
+          yPosition = topMargin;
+        }
+
+        pdf.setFontSize(11);
+        const sectionType = section.type === 'mc' ? 'Multiple Choice' : 'True/False';
+        pdf.text(`${sectionType} (${section.count} questions)`, 20, yPosition);
+        yPosition += 8;
+
+        const questionsPerRow = 5;
+        const usableWidth = pageWidth - (margin * 2);
+        const questionWidth = usableWidth / questionsPerRow;
+        const rowHeight = 20;
+        const padding = 2;
+        const totalRows = Math.ceil(section.count / questionsPerRow);
+
+        for (let row = 0; row < totalRows; row++) {
+        if (yPosition + rowHeight > pageHeight - margin) {
+          pdf.addPage();
+          drawCornerMarkers(pdf);
+          yPosition = topMargin;
+        }
+
+          const rowY = yPosition;
+          for (let col = 0; col < questionsPerRow; col++) {
+            const index = row * questionsPerRow + col;
+            if (index >= section.count) break;
+
+            const questionStartX = margin + (col * questionWidth);
+            const questionCenterX = questionStartX + (questionWidth / 2);
+
+            // Draw border around question for separation
+            pdf.setDrawColor(200, 200, 200);
+            pdf.setLineWidth(0.1);
+            pdf.rect(questionStartX + padding, rowY, questionWidth - (padding * 2), rowHeight - 2, 'S');
+
+            // Centered question number
+            pdf.setFontSize(8);
+            const questionText = `Q${questionNumber}`;
+            const textWidth = pdf.getTextWidth(questionText);
+            pdf.text(questionText, questionCenterX - (textWidth / 2), rowY + 3);
+
+            // Draw bubbles - compact grid layout, centered
+            const bubbleY = rowY + 8;
+            const options = section.type === 'mc'
+              ? getOptionLabels(section.options || 4)
+              : ['T', 'F'];
+            const offsets = getOptionOffsets(options.length, BUBBLE_SPACING_MM);
+
+            options.forEach((option, optionIndex) => {
+              const x = questionCenterX + offsets[optionIndex];
+              pdf.setDrawColor(0, 0, 0);
+              pdf.circle(x, bubbleY, 2.5, 'S');
+              pdf.setFontSize(6);
+              pdf.text(option, x - 1, bubbleY + 4);
+            });
+
+            questionNumber++;
+          }
+
+          yPosition += rowHeight;
+        }
+
+        yPosition += 5; // Space between sections
+      });
+
+      return pdf;
+    } catch (error) {
+      console.error('PDF generation failed:', error);
+      alert('Failed to generate PDF. Please try again.');
+      throw error;
     }
   };
 
@@ -264,130 +708,22 @@ function AnswerSheetGenerator() {
     setShowDownloadModal(false);
 
     try {
-      const pdf = new jsPDF();
-
-      // Set up the document
-      pdf.setFontSize(20);
-      pdf.text(exam.name, 20, 30);
-
-      if (exam.description) {
-        pdf.setFontSize(12);
-        pdf.text(exam.description, 20, 45);
-      }
-
-      // Instructions
-      pdf.setFontSize(14);
-      pdf.text('Answer Sheet Instructions:', 20, 70);
-      pdf.setFontSize(10);
-      pdf.text('• Fill in the bubbles completely with a dark pencil or pen', 20, 85);
-      pdf.text('• Make sure your marks are within the circles', 20, 95);
-      pdf.text('• Erase completely if you need to change an answer', 20, 105);
-
-      let yPosition = 125;
-
-      // Student Information Header
-      const studentFields = [];
-      if (exam.studentInfo.name) studentFields.push('Name: ____________________');
-      if (exam.studentInfo.last_name) studentFields.push('Last Name: ____________________');
-      if (exam.studentInfo.nickname) studentFields.push('Nickname: ____________________');
-      if (exam.studentInfo.class) studentFields.push('Class: ____________________');
-
-      if (studentFields.length > 0) {
-        pdf.setFontSize(12);
-        pdf.text('Student Information:', 20, yPosition);
-        yPosition += 15;
-
-        pdf.setFontSize(10);
-        studentFields.forEach(field => {
-          pdf.text(field, 30, yPosition);
-          yPosition += 12;
-        });
-        yPosition += 15;
-      }
-
-      // Student ID Section
-      if (exam.studentInfo.student_id) {
-        pdf.setFontSize(12);
-        pdf.text('Student ID:', 20, yPosition);
-        yPosition += 15;
-
-        pdf.setFontSize(10);
-        pdf.text('Write your student ID number in the squares below:', 30, yPosition);
-        yPosition += 15;
-
-        // Draw student ID squares
-        const squareSize = 12;
-        const squaresPerRow = 10;
-        const squareSpacing = 2;
-        const startX = 30;
-
-        for (let i = 0; i < exam.studentInfo.student_id_digits; i++) {
-          const row = Math.floor(i / squaresPerRow);
-          const col = i % squaresPerRow;
-          const x = startX + (col * (squareSize + squareSpacing));
-          const y = yPosition + (row * (squareSize + squareSpacing + 5));
-
-          // Draw square
-          pdf.rect(x, y, squareSize, squareSize);
-
-          // Add number label below square
-          pdf.setFontSize(8);
-          pdf.text((i + 1).toString(), x + squareSize/2 - 1, y + squareSize + 4);
-        }
-
-        yPosition += Math.ceil(exam.studentInfo.student_id_digits / squaresPerRow) * (squareSize + squareSpacing + 10) + 15;
-      }
-      let questionNumber = 1;
-
-      // Generate answer bubbles for each test section
-      exam.testStructure.forEach(section => {
-        // Section header
-        if (yPosition > 200) {
-          pdf.addPage();
-          yPosition = 30;
-        }
-
-        pdf.setFontSize(14);
-        const sectionType = section.type === 'mc' ? 'Multiple Choice' : 'True/False';
-        pdf.text(`${sectionType} Questions (${section.count} questions)`, 20, yPosition);
-        yPosition += 15;
-
-        // Generate bubbles for each question in this section
-        for (let i = 0; i < section.count; i++) {
-          if (yPosition > 250) { // New page if needed
-            pdf.addPage();
-            yPosition = 30;
-          }
-
-          // Question number
-          pdf.setFontSize(12);
-          pdf.text(`Question ${questionNumber}`, 20, yPosition);
-
-          // Draw bubbles
-          const bubbleY = yPosition + 10;
-          const options = section.type === 'mc' ? ['A', 'B', 'C', 'D'] : ['T', 'F'];
-
-          options.forEach((option, optionIndex) => {
-            const x = 40 + (optionIndex * 25);
-            // Draw circle
-            pdf.circle(x, bubbleY, 4, 'stroke');
-            // Option label
-            pdf.setFontSize(8);
-            pdf.text(option, x - 2, bubbleY + 8);
-          });
-
-          yPosition += 25;
-          questionNumber++;
-        }
-
-        yPosition += 10; // Space between sections
-      });
-
-      // Save the PDF
+      const pdf = await generatePDFDoc();
       pdf.save(`${exam.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_answer_sheet.pdf`);
     } catch (error) {
       console.error('PDF generation failed:', error);
       alert('Failed to generate PDF. Please try again.');
+    }
+  };
+
+  const previewPDF = async () => {
+    try {
+      const pdf = await generatePDFDoc();
+      const url = pdf.output('bloburl');
+      window.open(url, '_blank');
+    } catch (error) {
+      console.error('PDF preview failed:', error);
+      alert('Failed to preview PDF. Please try again.');
     }
   };
 
@@ -640,7 +976,10 @@ function AnswerSheetGenerator() {
                       },
                       rows: [
                         new TableRow({
-                          children: (section.type === 'mc' ? ['A', 'B', 'C', 'D'] : ['True', 'False']).map(option =>
+                          children: (section.type === 'mc' 
+                            ? getOptionLabels(section.options || 4)
+                            : ['True', 'False']
+                          ).map(option =>
                             new TableCell({
                               children: [
                                 new Paragraph({
@@ -748,36 +1087,76 @@ function AnswerSheetGenerator() {
               className="overflow-hidden"
             >
               <div className="space-y-4 pt-4 border-t border-gray-200">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Number of Questions
-                  </label>
-                  <div className="flex items-center space-x-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => updateSectionCount(section.id, section.count - 1)}
-                      disabled={section.count <= 1}
-                    >
-                      <Minus size={14} />
-                    </Button>
-                    <input
-                      type="number"
-                      value={section.count}
-                      onChange={(e) => updateSectionCount(section.id, parseInt(e.target.value) || 1)}
-                      className="w-20 px-3 py-2 border border-gray-300 rounded-lg text-center focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      min="1"
-                      max="50"
-                    />
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => updateSectionCount(section.id, section.count + 1)}
-                      disabled={section.count >= 50}
-                    >
-                      <Plus size={14} />
-                    </Button>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Number of Questions
+                    </label>
+                    <div className="flex items-center space-x-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => updateSectionCount(section.id, section.count - 1)}
+                        disabled={section.count <= 1}
+                      >
+                        <Minus size={14} />
+                      </Button>
+                      <input
+                        type="number"
+                        value={section.count}
+                        onChange={(e) => updateSectionCount(section.id, parseInt(e.target.value) || 1)}
+                        className="w-20 px-3 py-2 border border-gray-300 rounded-lg text-center focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        min="1"
+                        max="50"
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => updateSectionCount(section.id, section.count + 1)}
+                        disabled={section.count >= 50}
+                      >
+                        <Plus size={14} />
+                      </Button>
+                    </div>
                   </div>
+
+                  {section.type === 'mc' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Options per Question
+                      </label>
+                      <div className="flex items-center space-x-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => updateSectionOptions(section.id, (section.options || 4) - 1)}
+                          disabled={(section.options || 4) <= 2}
+                        >
+                          <Minus size={14} />
+                        </Button>
+                        <select
+                          value={section.options || 4}
+                          onChange={(e) => updateSectionOptions(section.id, parseInt(e.target.value))}
+                          className="w-20 px-3 py-2 border border-gray-300 rounded-lg text-center focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                          <option value={2}>2</option>
+                          <option value={3}>3</option>
+                          <option value={4}>4</option>
+                        </select>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => updateSectionOptions(section.id, (section.options || 4) + 1)}
+                          disabled={(section.options || 4) >= 4}
+                        >
+                          <Plus size={14} />
+                        </Button>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Options: {getOptionLabels(section.options || 4).join(', ')}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -793,7 +1172,10 @@ function AnswerSheetGenerator() {
                         <div key={questionNumber} className="text-center">
                           <div className="text-sm font-medium mb-1">Q{questionNumber}</div>
                           <div className="flex space-x-1 justify-center">
-                            {(section.type === 'mc' ? ['A', 'B', 'C', 'D'] : ['T', 'F']).map(option => (
+                            {(section.type === 'mc' 
+                              ? getOptionLabels(section.options || 4) 
+                              : ['T', 'F']
+                            ).map(option => (
                               <label key={option} className="flex items-center">
                                 <input
                                   type="radio"
@@ -823,9 +1205,21 @@ function AnswerSheetGenerator() {
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-800 mb-2">Answer Sheet Constructor</h1>
-        <p className="text-gray-600">Create custom answer sheets with multiple choice and true/false questions</p>
+      <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <Link to="/dashboard" className="flex items-center gap-2 group">
+          <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/40 text-sm font-semibold group-hover:bg-emerald-500/20">
+            ES
+          </span>
+          <span className="text-lg font-semibold tracking-tight text-gray-900 group-hover:text-emerald-600">
+            Exam<span className="text-emerald-500 group-hover:text-emerald-400">Scan</span>
+          </span>
+        </Link>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-800 mb-1">Answer Sheet Constructor</h1>
+          <p className="text-gray-600 text-sm sm:text-base">
+            Create custom answer sheets with multiple choice and true/false questions
+          </p>
+        </div>
       </div>
 
       {/* Template Settings */}
@@ -996,24 +1390,36 @@ function AnswerSheetGenerator() {
               className="bg-blue-600 hover:bg-blue-700"
             >
               <Save size={20} className="mr-2" />
-              {isSaving ? 'Saving...' : 'Save Template'}
+              {isSaving ? 'Saving...' : 'Save Exam'}
             </Button>
 
             <Button
-              onClick={printTemplate}
+              onClick={previewPDF}
               variant="outline"
             >
-              <Printer size={20} className="mr-2" />
-              Print
+              Preview
             </Button>
 
-            <Button
-              onClick={() => setShowDownloadModal(true)}
-              variant="outline"
-            >
-              <Download size={20} className="mr-2" />
-              Download
-            </Button>
+            {/* Only allow Print/Download when creating a new exam; for editing focus on saving changes */}
+            {!examId && (
+              <>
+                <Button
+                  onClick={printTemplate}
+                  variant="outline"
+                >
+                  <Printer size={20} className="mr-2" />
+                  Print
+                </Button>
+
+                <Button
+                  onClick={() => setShowDownloadModal(true)}
+                  variant="outline"
+                >
+                  <Download size={20} className="mr-2" />
+                  Download
+                </Button>
+              </>
+            )}
           </div>
         </Card>
       )}

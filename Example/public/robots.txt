@@ -1,0 +1,17 @@
+# robots.txt for TutorCat
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /api/
+Disallow: /.netlify/
+Disallow: /dashboard
+Disallow: /profile
+Disallow: /lessons
+Disallow: /evaluation
+
+# Sitemap location
+Sitemap: https://tutorcat.online/sitemap.xml
+
+# Crawl-delay (optional, helps prevent server overload)
+Crawl-delay: 1
+

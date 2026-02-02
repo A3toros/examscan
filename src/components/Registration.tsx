@@ -1,126 +1,193 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Link } from 'react-router-dom';
-import { User, Mail, Lock, School, ArrowLeft, CheckCircle } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { User, Mail, Lock, ArrowLeft, CheckCircle, KeyRound, AlertCircle } from 'lucide-react';
 import Button from './ui/Button';
 import Card from './ui/Card';
 import Modal from './ui/Modal';
 import LoadingSpinner from './ui/LoadingSpinner';
+import { sendOTP, verifyOTP, type User as UserType } from '../utils/auth';
+
+type RegistrationStep = 'email' | 'verify' | 'details';
 
 const Registration: React.FC = () => {
+  const [step, setStep] = useState<RegistrationStep>('email');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [resendTimer, setResendTimer] = useState(0);
+
+  // Step 1: Email
+  const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
+
+  // Step 2: OTP
+  const [otpCode, setOtpCode] = useState('');
+  const [otpError, setOtpError] = useState<string | null>(null);
+
+  // Step 3: User details
   const [formData, setFormData] = useState({
-    name: '',
+    firstName: '',
+    lastName: '',
     username: '',
-    email: '',
-    school: '',
     password: '',
     confirmPassword: ''
   });
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
+  const navigate = useNavigate();
 
-  const handleRegister = async (e: React.FormEvent) => {
+  // Resend timer countdown
+  useEffect(() => {
+    if (resendTimer > 0) {
+      const timer = setTimeout(() => setResendTimer(resendTimer - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [resendTimer]);
+
+  const handleEmailSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    // Basic validation
-    if (!formData.name || !formData.username || !formData.email || !formData.school || !formData.password) {
-      alert('Please fill in all required fields');
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email.trim() || !emailRegex.test(email)) {
+      setEmailError('Please enter a valid email address');
       return;
     }
 
-    if (formData.password !== formData.confirmPassword) {
-      alert('Passwords do not match');
-      return;
-    }
-
-    if (formData.password.length < 6) {
-      alert('Password must be at least 6 characters long');
-      return;
-    }
-
-    if (formData.username.length < 3) {
-      alert('Username must be at least 3 characters long');
-      return;
-    }
-
+    setEmailError(null);
     setIsLoading(true);
+    setError(null);
 
     try {
-      // Call API to register user
-      const response = await fetch('/.netlify/functions/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formData.name,
-          username: formData.username,
-          email: formData.email,
-          school: formData.school,
-          password: formData.password
-        })
-      });
-
-      const result = await response.json();
+      const result = await sendOTP(email, 'signup');
 
       if (result.success) {
-        alert('Registration successful! You can now log in.');
-        window.location.href = '/login';
+        setStep('verify');
+        setResendTimer(60);
       } else {
-        alert(result.error || 'Registration failed. Please try again.');
+        setError(result.error || 'Failed to send verification code');
       }
-    } catch (error) {
-      console.error('Registration error:', error);
-      alert('Registration failed. Please try again.');
+    } catch (err) {
+      setError('Network error. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleOTPSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (otpCode.length !== 6 || !/^\d{6}$/.test(otpCode)) {
+      setOtpError('Please enter a valid 6-digit code');
+      return;
+    }
+
+    setOtpError(null);
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Verify OTP with backend (without userData - just verify the code)
+      const result = await verifyOTP(email, otpCode, 'signup');
+      
+      if (result.success) {
+        // OTP is valid, proceed to details form
+        setStep('details');
+      } else {
+        // OTP is invalid
+        setOtpError(result.error || 'Invalid verification code');
+      }
+    } catch (err) {
+      setError('Network error. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDetailsSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    const errors: Record<string, string> = {};
+
+    if (!formData.firstName.trim()) {
+      errors.firstName = 'First name is required';
+    }
+    if (!formData.lastName.trim()) {
+      errors.lastName = 'Last name is required';
+    }
+    if (!formData.username.trim() || formData.username.length < 3) {
+      errors.username = 'Username must be at least 3 characters';
+    }
+    if (!formData.password || formData.password.length < 6) {
+      errors.password = 'Password must be at least 6 characters';
+    }
+    if (formData.password !== formData.confirmPassword) {
+      errors.confirmPassword = 'Passwords do not match';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+
+    setFormErrors({});
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const result = await verifyOTP(
+        email,
+        otpCode,
+        'signup',
+        {
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          username: formData.username,
+          password: formData.password
+        }
+      );
+
+      if (result.success && result.user) {
+        // Registration successful, redirect to dashboard
+        navigate('/dashboard');
+      } else {
+        setError(result.error || 'Registration failed');
+      }
+    } catch (err) {
+      setError('Network error. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleResendOTP = async () => {
     if (resendTimer > 0) return;
 
     setIsLoading(true);
-
     try {
-      const response = await fetch('/api/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: formData.email,
-          type: 'email_verification'
-        })
-      });
-
-      const result = await response.json();
-
+      const result = await sendOTP(email, 'signup');
       if (result.success) {
         setResendTimer(60);
-        const timer = setInterval(() => {
-          setResendTimer(prev => {
-            if (prev <= 1) {
-              clearInterval(timer);
-              return 0;
-            }
-            return prev - 1;
-          });
-        }, 1000);
+        setError(null);
       } else {
-        alert(result.error || 'Failed to resend OTP');
+        setError(result.error || 'Failed to resend OTP');
       }
-    } catch (error) {
-      console.error('Error resending OTP:', error);
-      alert('Failed to resend verification code.');
+    } catch {
+      setError('Failed to resend verification code');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+    if (formErrors[name]) {
+      setFormErrors(prev => ({ ...prev, [name]: '' }));
+    }
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-12">
+    <div className="min-h-screen flex items-center justify-center px-4 py-12 bg-gradient-to-br from-blue-50 to-white">
       <motion.div
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
@@ -134,26 +201,192 @@ const Registration: React.FC = () => {
               Back to Home
             </Link>
             <h1 className="text-3xl font-bold text-gray-800 mb-2">Join ExamScan</h1>
-            <p className="text-gray-600">Create your teacher account to get started</p>
+            <p className="text-gray-600">Create your teacher account</p>
           </div>
 
-          <form onSubmit={handleRegister} className="space-y-6">
+          {/* Progress Indicator */}
+          <div className="flex items-center justify-center mb-6">
+            <div className="flex items-center">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${step === 'email' ? 'bg-blue-600 text-white' : 'bg-green-500 text-white'}`}>
+                {step !== 'email' ? <CheckCircle size={16} /> : '1'}
+              </div>
+              <div className={`w-16 h-1 ${step !== 'email' ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${step === 'verify' ? 'bg-blue-600 text-white' : step === 'details' ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'}`}>
+                {step === 'details' ? <CheckCircle size={16} /> : '2'}
+              </div>
+              <div className={`w-16 h-1 ${step === 'details' ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${step === 'details' ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'}`}>
+                3
+              </div>
+            </div>
+          </div>
+
+          {/* Step 1: Email */}
+          {step === 'email' && (
+            <form onSubmit={handleEmailSubmit} className="space-y-6">
               <div>
-                <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
-                  Full Name
+                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
+                  Email Address
                 </label>
                 <div className="relative">
-                  <User className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                  <Mail className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
                   <input
-                    type="text"
-                    id="name"
-                    name="name"
-                    value={formData.name}
-                    onChange={handleInputChange}
-                    className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Enter your full name"
+                    type="email"
+                    id="email"
+                    name="email"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      setEmailError(null);
+                    }}
+                    className={`w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                      emailError ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="Enter your email"
                     required
                   />
+                </div>
+                {emailError && (
+                  <p className="mt-2 text-red-600 text-sm">{emailError}</p>
+                )}
+                <p className="mt-2 text-sm text-gray-500">
+                  We'll send a verification code to this email
+                </p>
+              </div>
+
+              <Button
+                type="submit"
+                className="w-full"
+                variant="primary"
+                disabled={isLoading || !email.trim()}
+                isLoading={isLoading}
+              >
+                Send Verification Code
+              </Button>
+            </form>
+          )}
+
+          {/* Step 2: OTP Verification */}
+          {step === 'verify' && (
+            <form onSubmit={handleOTPSubmit} className="space-y-6">
+              <div className="text-center mb-4">
+                <p className="text-sm text-gray-600 mb-2">
+                  We sent a 6-digit code to <strong>{email}</strong>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep('email');
+                    setOtpCode('');
+                  }}
+                  className="text-sm text-blue-600 hover:text-blue-700"
+                >
+                  Change email
+                </button>
+              </div>
+
+              <div>
+                <label htmlFor="otp" className="block text-sm font-medium text-gray-700 mb-2">
+                  Verification Code
+                </label>
+                <div className="relative">
+                  <KeyRound className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                  <input
+                    type="text"
+                    id="otp"
+                    name="otp"
+                    value={otpCode}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      setOtpCode(value);
+                      setOtpError(null);
+                    }}
+                    className={`w-full pl-10 pr-3 py-2 border rounded-lg text-center text-2xl tracking-widest focus:ring-2 focus:ring-blue-500 ${
+                      otpError ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="000000"
+                    maxLength={6}
+                    required
+                  />
+                </div>
+                {otpError && (
+                  <p className="mt-2 text-red-600 text-sm">{otpError}</p>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <Button
+                  type="button"
+                  onClick={handleResendOTP}
+                  disabled={resendTimer > 0 || isLoading}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend Code'}
+                </Button>
+                <Button
+                  type="submit"
+                  className="flex-1"
+                  variant="primary"
+                  disabled={isLoading || otpCode.length !== 6}
+                  isLoading={isLoading}
+                >
+                  Verify Code
+                </Button>
+              </div>
+            </form>
+          )}
+
+          {/* Step 3: User Details */}
+          {step === 'details' && (
+            <form onSubmit={handleDetailsSubmit} className="space-y-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-2">
+                    First Name
+                  </label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                    <input
+                      type="text"
+                      id="firstName"
+                      name="firstName"
+                      value={formData.firstName}
+                      onChange={handleInputChange}
+                      className={`w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                        formErrors.firstName ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                      placeholder="First name"
+                      required
+                    />
+                  </div>
+                  {formErrors.firstName && (
+                    <p className="mt-1 text-red-600 text-xs">{formErrors.firstName}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-2">
+                    Last Name
+                  </label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                    <input
+                      type="text"
+                      id="lastName"
+                      name="lastName"
+                      value={formData.lastName}
+                      onChange={handleInputChange}
+                      className={`w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                        formErrors.lastName ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                      placeholder="Last name"
+                      required
+                    />
+                  </div>
+                  {formErrors.lastName && (
+                    <p className="mt-1 text-red-600 text-xs">{formErrors.lastName}</p>
+                  )}
                 </div>
               </div>
 
@@ -169,49 +402,16 @@ const Registration: React.FC = () => {
                     name="username"
                     value={formData.username}
                     onChange={handleInputChange}
-                    className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className={`w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                      formErrors.username ? 'border-red-500' : 'border-gray-300'
+                    }`}
                     placeholder="Choose a username"
                     required
                   />
                 </div>
-              </div>
-
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                  Email Address
-                </label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-                  <input
-                    type="email"
-                    id="email"
-                    name="email"
-                    value={formData.email}
-                    onChange={handleInputChange}
-                    className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Enter your email"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="school" className="block text-sm font-medium text-gray-700 mb-2">
-                  School/Organization
-                </label>
-                <div className="relative">
-                  <School className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-                  <input
-                    type="text"
-                    id="school"
-                    name="school"
-                    value={formData.school}
-                    onChange={handleInputChange}
-                    className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Enter your school name"
-                    required
-                  />
-                </div>
+                {formErrors.username && (
+                  <p className="mt-1 text-red-600 text-xs">{formErrors.username}</p>
+                )}
               </div>
 
               <div>
@@ -226,11 +426,16 @@ const Registration: React.FC = () => {
                     name="password"
                     value={formData.password}
                     onChange={handleInputChange}
-                    className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Create a password (min 8 chars)"
+                    className={`w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                      formErrors.password ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="Create a password (min 6 chars)"
                     required
                   />
                 </div>
+                {formErrors.password && (
+                  <p className="mt-1 text-red-600 text-xs">{formErrors.password}</p>
+                )}
               </div>
 
               <div>
@@ -245,22 +450,38 @@ const Registration: React.FC = () => {
                     name="confirmPassword"
                     value={formData.confirmPassword}
                     onChange={handleInputChange}
-                    className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className={`w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                      formErrors.confirmPassword ? 'border-red-500' : 'border-gray-300'
+                    }`}
                     placeholder="Confirm your password"
                     required
                   />
                 </div>
+                {formErrors.confirmPassword && (
+                  <p className="mt-1 text-red-600 text-xs">{formErrors.confirmPassword}</p>
+                )}
               </div>
 
               <Button
                 type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white"
-                size="lg"
+                className="w-full"
+                variant="primary"
+                disabled={isLoading}
                 isLoading={isLoading}
               >
-                {isLoading ? 'Creating Account...' : 'Create Account'}
+                Create Account
               </Button>
             </form>
+          )}
+
+          {error && (
+            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <div className="flex items-center">
+                <AlertCircle className="text-red-500 mr-3" size={20} />
+                <p className="text-red-700 text-sm">{error}</p>
+              </div>
+            </div>
+          )}
 
           <div className="mt-6 text-center">
             <p className="text-gray-600">

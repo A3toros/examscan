@@ -7,7 +7,14 @@ import tsparser from '@typescript-eslint/parser'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'public']),
+  globalIgnores([
+    'dist',
+    'public',
+    'node_modules',
+    'netlify',
+    '.netlify',
+    'Example',
+  ]),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -34,6 +41,10 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: {
         ...globals.browser,
+        // Node/Netlify runtime globals
+        process: 'readonly',
+        // DOM lib types that ESLint may treat as globals in TS files
+        RequestInit: 'readonly',
         KVNamespace: 'readonly',
         Request: 'readonly',
         Response: 'readonly',
@@ -50,12 +61,19 @@ export default defineConfig([
     },
     plugins: {
       '@typescript-eslint': tseslint,
+      'react-hooks': reactHooks,
     },
     rules: {
       ...js.configs.recommended.rules,
       ...tseslint.configs.recommended.rules,
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
-      '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // Project-wide ergonomics
+      '@typescript-eslint/no-explicit-any': 'off',
+      'no-control-regex': 'off',
+      'no-useless-escape': 'off',
+
+      // Unused vars: allow underscore-prefixed and ignore unused catch params
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_', caughtErrors: 'none' }],
+      '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_', caughtErrors: 'none' }],
     },
   },
 ])
