@@ -536,35 +536,24 @@ class OCRService {
   }
 
   /**
-   * 7-segment layout: relative geometry matching PDF thick bars (longer bars: 12–88% width, verticals to center).
-   */
-  /**
-   * 7-segment ROI: non-overlapping boxes.
-   * Digits in the PDF cells have internal padding, so the actual strokes are
-   * roughly in the inner 70% of the cell. Coordinates are relative fractions
-   * of the digit-cell bounding box (0–1).
-   *
-   * Layout (classic 7-segment):
-   *   ──A──
-   *  |     |
-   *  F     B
-   *  |     |
-   *   ──D──
-   *  |     |
-   *  E     C
-   *  |     |
-   *   ──G──
+   * 7-segment ROI: relative (0–1) boxes matching the PDF AnswerSheetGenerator layout.
+   * Layout: 7×10mm cell, pad=0.4mm, bar=0.8mm, gap=0.4mm.
+   *   ──A──  (top)
+   *  F     B  (upper verticals)
+   *   ──D──  (middle)
+   *  E     C  (lower verticals)
+   *   ──G──  (bottom)
    */
   private static readonly SEGMENT_ROI: Record<string, { x: number; y: number; w: number; h: number }> = {
-    // Digit centered in cell with heavy padding. F reads ink at y=0.20,
-    // so actual digit spans ~y 0.20–0.76. Bars must be INSIDE that range.
-    A: { x: 0.22, y: 0.20, w: 0.56, h: 0.08 },  // Top bar  (was 0.12)
-    D: { x: 0.22, y: 0.44, w: 0.56, h: 0.12 },  // Middle bar
-    G: { x: 0.22, y: 0.64, w: 0.56, h: 0.08 },  // Bottom bar (was 0.72)
-    B: { x: 0.68, y: 0.26, w: 0.24, h: 0.18 },  // Top-right vertical
-    C: { x: 0.68, y: 0.52, w: 0.24, h: 0.18 },  // Bottom-right vertical
-    F: { x: 0.08, y: 0.26, w: 0.24, h: 0.18 },  // Top-left vertical
-    E: { x: 0.08, y: 0.52, w: 0.24, h: 0.18 },  // Bottom-left vertical
+    // Horizontal bars: hBarX=1.6mm, hBarW=3.8mm in 7mm cell → x≈0.23, w≈0.54
+    A: { x: 0.23, y: 0.04, w: 0.54, h: 0.08 },  // Top
+    D: { x: 0.23, y: 0.46, w: 0.54, h: 0.06 },  // Middle
+    G: { x: 0.23, y: 0.88, w: 0.54, h: 0.08 },  // Bottom
+    // Vertical bars: 0.8mm wide, between horizontal bar edges
+    F: { x: 0.06, y: 0.16, w: 0.11, h: 0.26 },  // Upper-left
+    B: { x: 0.83, y: 0.16, w: 0.11, h: 0.26 },  // Upper-right
+    E: { x: 0.06, y: 0.58, w: 0.11, h: 0.26 },  // Lower-left
+    C: { x: 0.83, y: 0.58, w: 0.11, h: 0.26 },  // Lower-right
   };
 
   /** Digit lookup A B C D E F G → digit. Matches generator digitSegments (0=ABCEFG, 1=BC, …). */

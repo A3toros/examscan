@@ -5,23 +5,15 @@
  * We use the /api/auth-me endpoint to get the current user.
  */
 
-// Always use relative paths in development to avoid CORS issues
-// In production builds, can use absolute URL if needed
+// Use relative path so API calls always go to the same site as the app (no cross-origin).
+// Set VITE_API_URL only if the API is on a different domain (e.g. custom backend).
 const getApiBaseUrl = () => {
-  const isDev = import.meta.env.DEV;
-  
-  // In development, always use relative path (works with Netlify Dev)
-  if (isDev) {
-    return '/.netlify/functions';
-  }
-  
-  // In production, check if VITE_API_URL is set
   const envUrl = import.meta.env.VITE_API_URL;
-  if (envUrl && (envUrl.startsWith('http://') || envUrl.startsWith('https://'))) {
-    return envUrl.replace(/\/$/, ''); // Remove trailing slash
+  if (envUrl && typeof envUrl === 'string' && (envUrl.startsWith('http://') || envUrl.startsWith('https://'))) {
+    const trimmed = envUrl.replace(/\/+$/, '').replace(/\.+$/, '');
+    if (trimmed) return trimmed;
   }
-  
-  // Default to relative path (works for both dev and production when deployed)
+  // Default: same origin (examscan.netlify.app, localhost, etc.)
   return '/.netlify/functions';
 };
 
