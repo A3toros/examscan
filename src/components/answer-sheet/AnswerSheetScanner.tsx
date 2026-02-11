@@ -69,9 +69,6 @@ function AnswerSheetScanner() {
   const [cameraReady, setCameraReady] = useState(false);
   const [recognitionStatus, setRecognitionStatus] = useState<'idle' | 'searching' | 'ready' | 'captured'>('idle');
 
-  // Video stream dimensions (set when metadata loads) – used to fix aspect/rotation on mobile
-  const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
-
   // Detect if we're on a small/mobile screen (used for camera constraints)
   const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -254,10 +251,7 @@ function AnswerSheetScanner() {
     video.srcObject = stream;
 
     const handleLoadedMetadata = () => {
-      const w = video.videoWidth;
-      const h = video.videoHeight;
-      console.log('[Camera] Video metadata loaded', { videoWidth: w, videoHeight: h });
-      setVideoDimensions(w && h ? { width: w, height: h } : null);
+      console.log('[Camera] Video metadata loaded', { w: video.videoWidth, h: video.videoHeight });
       setCameraReady(true);
     };
 
@@ -314,31 +308,21 @@ function AnswerSheetScanner() {
         return;
       }
 
-      // Mobile: prefer portrait (height > width) so the feed fills the screen without crop/rotation.
-      // Desktop: 16:9 is fine.
-      const videoConstraints: MediaTrackConstraints = isMobileViewport
-        ? {
-            facingMode: { ideal: 'environment' },
-            // Portrait: height > width so stream matches phone orientation
-            width: { ideal: 720, max: 1080 },
-            height: { ideal: 1280, max: 1920 },
-            aspectRatio: { ideal: 9 / 16 },
-          }
-        : {
-            facingMode: { ideal: 'environment' },
-            aspectRatio: { ideal: 16 / 9 },
-            width: { min: 1280, ideal: 1920, max: 2560 },
-            height: { min: 720, ideal: 1080, max: 1440 },
-          };
+      // Prefer back camera; keep constraints loose so stream actually starts on all devices.
+      const videoConstraints: MediaTrackConstraints = {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: isMobileViewport ? 1280 : 1920 },
+        height: { ideal: isMobileViewport ? 720 : 1080 },
+      };
 
-      console.log('[Camera] Requesting camera...', { isMobileViewport, videoConstraints });
+      console.log('[Camera] Requesting camera...', { isMobileViewport });
 
       let mediaStream: MediaStream;
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
       } catch (firstErr: any) {
-        if (firstErr?.name === 'OverconstrainedError' && isMobileViewport) {
-          console.log('[Camera] Portrait constraints failed, retrying with simple video: true');
+        if (firstErr?.name === 'OverconstrainedError' || firstErr?.name === 'ConstraintNotSatisfiedError') {
+          console.log('[Camera] Constraints failed, retrying with video: true');
           mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
         } else {
           throw firstErr;
@@ -421,7 +405,6 @@ function AnswerSheetScanner() {
     }
     setCameraReady(false);
     setRecognitionStatus('idle');
-    setVideoDimensions(null);
     setCameraZoom(1);
     setCameraPan({ x: 0, y: 0 });
   };
@@ -441,15 +424,15 @@ function AnswerSheetScanner() {
     });
   };
 
-  const getTouchDistance = (touches: TouchList) => {
+  const getTouchDistance = (touches: React.TouchEvent['touches']) => {
     if (touches.length < 2) return 0;
     return Math.hypot(touches[1].clientX - touches[0].clientX, touches[1].clientY - touches[0].clientY);
   };
-  const getTouchCenter = (touches: TouchList) => {
-    if (touches.length < 2) return { x: 0, y: 0 };
+  const getTouchCenter = (touches: React.TouchEvent['touches']): { centerX: number; centerY: number } => {
+    if (touches.length < 2) return { centerX: 0, centerY: 0 };
     return {
-      x: (touches[0].clientX + touches[1].clientX) / 2,
-      y: (touches[0].clientY + touches[1].clientY) / 2,
+      centerX: (touches[0].clientX + touches[1].clientX) / 2,
+      centerY: (touches[0].clientY + touches[1].clientY) / 2,
     };
   };
 
@@ -1166,58 +1149,35 @@ function AnswerSheetScanner() {
                     : 'relative bg-gray-900 rounded-lg overflow-hidden'
                 }
               >
-                {/* Preview area: on mobile, if stream is landscape we rotate -90° so full FOV fits portrait screen. */}
-                {(() => {
-                  const isLandscapeStream = videoDimensions && videoDimensions.width > videoDimensions.height;
-                  const rotateOnMobile = isMobileViewport && isLandscapeStream;
-                  const zoomScale = Math.max(1, Math.min(4, Number(cameraZoom) || 1));
-                  const zoomTransform = `scale(${zoomScale}) translate(${cameraPan.x}px, ${cameraPan.y}px)`;
-                  return (
-                    <div
-                      ref={zoomWrapperRef}
-                      className={
-                        isMobileViewport
-                          ? 'relative flex-1 w-full min-h-0 overflow-hidden touch-none bg-black'
-                          : 'relative w-full aspect-[9/16] md:aspect-[16/9] overflow-hidden bg-black'
-                      }
-                      onTouchStart={onZoomWrapperTouchStart}
-                      onTouchMove={onZoomWrapperTouchMove}
-                      onTouchEnd={onZoomWrapperTouchEnd}
-                      style={{ touchAction: 'none' }}
-                    >
-                      <div
-                        className="absolute inset-0 flex items-center justify-center origin-center transition-transform duration-100"
-                        style={{ transform: zoomTransform }}
-                      >
-                        {rotateOnMobile ? (
-                          <div
-                            className="flex items-center justify-center"
-                            style={{
-                              width: '100vh',
-                              height: '100vw',
-                              transform: 'rotate(-90deg)',
-                              flexShrink: 0,
-                            }}
-                          >
-                            <video
-                              ref={videoRef}
-                              autoPlay
-                              playsInline
-                              muted
-                              className="h-full w-full object-contain bg-black"
-                            />
-                          </div>
-                        ) : (
-                          <video
-                            ref={videoRef}
-                            autoPlay
-                            playsInline
-                            muted
-                            className="h-full w-full object-cover"
-                          />
-                        )}
-                      </div>
-                      <canvas ref={canvasRef} className="hidden" />
+                {/* Camera preview: video fills layer; zoom/pan on wrapper. */}
+                <div
+                  ref={zoomWrapperRef}
+                  className={
+                    isMobileViewport
+                      ? 'relative flex-1 w-full min-h-[40vh] overflow-hidden touch-none'
+                      : 'relative w-full aspect-[9/16] md:aspect-[16/9] overflow-hidden'
+                  }
+                  onTouchStart={onZoomWrapperTouchStart}
+                  onTouchMove={onZoomWrapperTouchMove}
+                  onTouchEnd={onZoomWrapperTouchEnd}
+                  style={{ touchAction: 'none' }}
+                >
+                  <div
+                    className="absolute inset-0 origin-center transition-transform duration-100"
+                    style={{
+                      transform: `scale(${Math.max(1, Math.min(4, Number(cameraZoom) || 1))}) translate(${cameraPan.x}px, ${cameraPan.y}px)`,
+                    }}
+                  >
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="absolute inset-0 w-full h-full object-cover"
+                      style={{ display: 'block' }}
+                    />
+                  </div>
+                  <canvas ref={canvasRef} className="hidden" />
 
                   {/* Alignment overlay for answer sheet borders */}
                   <div className="pointer-events-none absolute inset-4 md:inset-8 flex items-center justify-center">
@@ -1268,8 +1228,6 @@ function AnswerSheetScanner() {
                     </button>
                   </div>
                 </div>
-                  );
-                })()}
 
                 <div
                   className={
