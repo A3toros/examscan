@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { Camera, Upload, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { Camera, Upload, CheckCircle, AlertCircle, RefreshCw, ZoomIn, ZoomOut } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Modal from '../ui/Modal';
@@ -74,6 +74,13 @@ function AnswerSheetScanner() {
     if (typeof window === 'undefined') return false;
     return window.innerWidth <= 768;
   });
+
+  // Camera zoom (pinch + buttons). 1 = 100%, display-only (capture uses raw video).
+  const [cameraZoom, setCameraZoom] = useState(1);
+  const [cameraPan, setCameraPan] = useState({ x: 0, y: 0 });
+  const zoomWrapperRef = useRef<HTMLDivElement>(null);
+  const lastPinchRef = useRef<{ distance: number; centerX: number; centerY: number } | null>(null);
+  const lastPanRef = useRef<{ x: number; y: number } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -415,7 +422,82 @@ function AnswerSheetScanner() {
     }
     setCameraReady(false);
     setRecognitionStatus('idle');
+    setCameraZoom(1);
+    setCameraPan({ x: 0, y: 0 });
   };
+
+  const ZOOM_MIN = 1;
+  const ZOOM_MAX = 4;
+  const ZOOM_STEP = 0.35;
+
+  const handleZoomIn = () => {
+    setCameraZoom((z) => Math.min(ZOOM_MAX, z + ZOOM_STEP));
+  };
+  const handleZoomOut = () => {
+    setCameraZoom((z) => {
+      const next = Math.max(ZOOM_MIN, z - ZOOM_STEP);
+      if (next <= 1) setCameraPan({ x: 0, y: 0 });
+      return next;
+    });
+  };
+
+  const getTouchDistance = (touches: TouchList) => {
+    if (touches.length < 2) return 0;
+    return Math.hypot(touches[1].clientX - touches[0].clientX, touches[1].clientY - touches[0].clientY);
+  };
+  const getTouchCenter = (touches: TouchList) => {
+    if (touches.length < 2) return { x: 0, y: 0 };
+    return {
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2,
+    };
+  };
+
+  const onZoomWrapperTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      lastPanRef.current = null;
+      lastPinchRef.current = {
+        distance: getTouchDistance(e.touches),
+        ...getTouchCenter(e.touches),
+      };
+    } else if (e.touches.length === 1 && cameraZoom > 1) {
+      lastPinchRef.current = null;
+      lastPanRef.current = { x: e.touches[0].clientX - cameraPan.x, y: e.touches[0].clientY - cameraPan.y };
+    }
+  };
+
+  const onZoomWrapperTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && lastPinchRef.current) {
+      e.preventDefault();
+      const distance = getTouchDistance(e.touches);
+      if (distance === 0) return;
+      const ratio = distance / lastPinchRef.current.distance;
+      setCameraZoom((z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z * ratio)));
+      lastPinchRef.current = { distance, ...getTouchCenter(e.touches) };
+    } else if (e.touches.length === 1 && lastPanRef.current !== null) {
+      e.preventDefault();
+      setCameraPan({
+        x: e.touches[0].clientX - lastPanRef.current.x,
+        y: e.touches[0].clientY - lastPanRef.current.y,
+      });
+    }
+  };
+
+  const onZoomWrapperTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length < 2) lastPinchRef.current = null;
+    if (e.touches.length < 1) lastPanRef.current = null;
+  };
+
+  // Non-passive touchmove so we can preventDefault() during pinch/pan (stops page scroll)
+  useEffect(() => {
+    const el = zoomWrapperRef.current;
+    if (!el) return;
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 || (e.touches.length === 1 && lastPanRef.current !== null)) e.preventDefault();
+    };
+    el.addEventListener('touchmove', onMove, { passive: false });
+    return () => el.removeEventListener('touchmove', onMove);
+  }, []);
 
   const captureImage = async () => {
     if (!videoRef.current || !canvasRef.current || !selectedExam) return;
@@ -1084,25 +1166,37 @@ function AnswerSheetScanner() {
                     : 'relative bg-gray-900 rounded-lg overflow-hidden'
                 }
               >
-                {/* 9:16 on phones (full area on mobile), 16:9 on desktop */}
+                {/* 9:16 on phones (full area on mobile), 16:9 on desktop. Zoom wrapper for pinch + buttons. */}
                 <div
+                  ref={zoomWrapperRef}
                   className={
                     isMobileViewport
-                      ? 'relative flex-1 w-full min-h-0'
-                      : 'relative w-full aspect-[9/16] md:aspect-[16/9]'
+                      ? 'relative flex-1 w-full min-h-0 overflow-hidden touch-none'
+                      : 'relative w-full aspect-[9/16] md:aspect-[16/9] overflow-hidden'
                   }
+                  onTouchStart={onZoomWrapperTouchStart}
+                  onTouchMove={onZoomWrapperTouchMove}
+                  onTouchEnd={onZoomWrapperTouchEnd}
+                  style={{ touchAction: 'none' }}
                 >
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className={
-                      isMobileViewport
-                        ? 'h-full w-full object-cover'
-                        : 'h-full w-full object-contain md:object-cover'
-                    }
-                  />
+                  <div
+                    className="absolute inset-0 flex items-center justify-center origin-center transition-transform duration-100"
+                    style={{
+                      transform: `scale(${Math.max(1, Math.min(4, Number(cameraZoom) || 1))}) translate(${cameraPan.x}px, ${cameraPan.y}px)`,
+                    }}
+                  >
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className={
+                        isMobileViewport
+                          ? 'h-full w-full object-contain'
+                          : 'h-full w-full object-contain md:object-cover'
+                      }
+                    />
+                  </div>
                   <canvas ref={canvasRef} className="hidden" />
 
                   {/* Alignment overlay for answer sheet borders */}
@@ -1131,13 +1225,35 @@ function AnswerSheetScanner() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Zoom controls: pinch works on the wrapper; buttons for zoom in/out */}
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-10">
+                    <button
+                      type="button"
+                      onClick={handleZoomIn}
+                      disabled={cameraZoom >= ZOOM_MAX}
+                      className="flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white shadow-lg hover:bg-black/80 disabled:opacity-40 disabled:pointer-events-none touch-manipulation"
+                      aria-label="Zoom in"
+                    >
+                      <ZoomIn size={22} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleZoomOut}
+                      disabled={cameraZoom <= ZOOM_MIN}
+                      className="flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white shadow-lg hover:bg-black/80 disabled:opacity-40 disabled:pointer-events-none touch-manipulation"
+                      aria-label="Zoom out"
+                    >
+                      <ZoomOut size={22} />
+                    </button>
+                  </div>
                 </div>
 
                 <div
                   className={
                     isMobileViewport
-                      ? 'absolute bottom-4 left-0 right-0 p-4 flex flex-col gap-3 bg-gradient-to-t from-black/80 to-transparent'
-                      : 'absolute bottom-4 left-1/2 transform -translate-x-1/2 flex space-x-4'
+                      ? 'absolute bottom-4 left-0 right-0 z-20 p-4 flex flex-col gap-3 bg-gradient-to-t from-black/80 to-transparent pointer-events-auto'
+                      : 'absolute bottom-4 left-1/2 z-20 transform -translate-x-1/2 flex space-x-4'
                   }
                 >
                   {!isMobileViewport && (
