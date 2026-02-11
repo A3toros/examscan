@@ -7,7 +7,7 @@ import Modal from '../ui/Modal';
 import jsPDF from 'jspdf';
 import { Document, Packer, Paragraph, TextRun, Table, TableCell, TableRow, WidthType } from 'docx';
 import { authenticatedFetch } from '../../utils/auth';
-import { BUBBLE_SPACING_MM, getOptionOffsets } from '../../utils/pdfLayout';
+import { BUBBLE_SPACING_MM, MARKER_MARGIN_MM, MARKER_SIZE_MM, ID_CELL_WIDTH_MM, ID_CELL_HEIGHT_MM, ID_CELL_SPACING_MM, ID_CELL_ROW_EXTRA_GAP_MM, ID_CELLS_PER_ROW, getOptionOffsets } from '../../utils/pdfLayout';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 interface TestSection {
@@ -416,7 +416,7 @@ function AnswerSheetGenerator() {
 
     try {
       const drawCornerMarkers = (doc: jsPDF) => {
-        const markerSize = 12; // Size of outer square (mm)
+        const markerSize = MARKER_SIZE_MM; // Size of outer square (mm)
         const innerInset = 2;
         const innerInset2 = 4;
         const drawMarker = (x: number, y: number) => {
@@ -428,7 +428,7 @@ function AnswerSheetGenerator() {
           doc.rect(x + innerInset2, y + innerInset2, markerSize - innerInset2 * 2, markerSize - innerInset2 * 2, 'F');
         };
 
-        const markerMargin = 5;
+        const markerMargin = MARKER_MARGIN_MM;
         drawMarker(markerMargin, markerMargin);
         drawMarker(pageWidth - markerMargin - markerSize, markerMargin);
         drawMarker(markerMargin, pageHeight - markerMargin - markerSize);
@@ -460,84 +460,86 @@ function AnswerSheetGenerator() {
         yPosition += 10;
       }
 
-      // Student ID Section
+      // Student ID Section (seven-segment bars: student darkens bars to form each digit)
+      const SEG_BAR_THICK = 0.8;   // mm — bar thickness
+      const SEG_BAR_GAP = 0.4;     // mm — gap between horizontal and vertical bars
+      const SEG_LIGHT_GRAY = 220;  // RGB for unfilled bars (guides)
+
       if (exam.studentInfo.student_id) {
         pdf.setFontSize(9);
         pdf.text('Student ID:', 20, yPosition);
+        yPosition += 6;
+        pdf.setFontSize(8);
+        pdf.text('Darken the bars for each digit (see example below). Leave bars light if that segment is off.', 20, yPosition);
         yPosition += 8;
 
-        // Draw student ID grids (match example digit size/spacing)
-        const squareWidth = 5.5;
-        const squareHeight = 7;
-        const squaresPerRow = 10;
-        const squareSpacing = 1;
-        const startX = 20; // Match Dashboard.tsx
+        const squareWidth = ID_CELL_WIDTH_MM;    // 7mm
+        const squareHeight = ID_CELL_HEIGHT_MM;  // 10mm
+        const squaresPerRow = ID_CELLS_PER_ROW;  // 10
+        const squareSpacing = ID_CELL_SPACING_MM; // 1.5mm
+        const startX = 20;
+        const halfThick = SEG_BAR_THICK / 2;
 
         for (let i = 0; i < exam.studentInfo.student_id_digits; i++) {
           const row = Math.floor(i / squaresPerRow);
           const col = i % squaresPerRow;
           const x = startX + (col * (squareWidth + squareSpacing));
-          const y = yPosition + (row * (squareHeight + squareSpacing + 5));
+          const y = yPosition + (row * (squareHeight + squareSpacing + ID_CELL_ROW_EXTRA_GAP_MM));
 
-          // "Digital 8" style guide only (no outer box)
-          pdf.setDrawColor(200, 200, 200);
-          pdf.setLineWidth(0.3);
+          // Seven-segment layout within the cell
+          // Positions: outer edges where vertical bars sit, inner zone for horizontal bars
+          const pad = 0.4;  // padding from cell edge
+          const topY = y + pad;
+          const bottomY = y + squareHeight - pad;
+          const centerY = y + squareHeight / 2;
+          const leftX = x + pad;
+          const rightX = x + squareWidth - pad;
 
-          const px = x;
-          const py = y;
-          const w = squareWidth;
-          const h = squareHeight;
+          // Horizontal bars (A=top, D=middle, G=bottom) — span between vertical bar inner edges
+          const hBarX = leftX + SEG_BAR_THICK + SEG_BAR_GAP;
+          const hBarW = (rightX - SEG_BAR_THICK - SEG_BAR_GAP) - hBarX;
 
-          const inset = 0.8;
-          const gap = 0.15; // match example digit spacing
-          const topY = py + inset;
-          const upperMidY = py + h / 3;
-          const centerY = py + h / 2;
-          const lowerMidY = py + (2 * h) / 3;
-          const bottomY = py + h - inset;
+          pdf.setDrawColor(SEG_LIGHT_GRAY, SEG_LIGHT_GRAY, SEG_LIGHT_GRAY);
+          pdf.setFillColor(SEG_LIGHT_GRAY, SEG_LIGHT_GRAY, SEG_LIGHT_GRAY);
 
-          const leftX = px + inset;
-          const innerLeftX = px + w / 3;
-          const innerRightX = px + (2 * w) / 3;
-          const rightX = px + w - inset;
+          // A (top horizontal)
+          pdf.rect(hBarX, topY, hBarW, SEG_BAR_THICK, 'F');
+          // D (middle horizontal)
+          pdf.rect(hBarX, centerY - halfThick, hBarW, SEG_BAR_THICK, 'F');
+          // G (bottom horizontal)
+          pdf.rect(hBarX, bottomY - SEG_BAR_THICK, hBarW, SEG_BAR_THICK, 'F');
 
-          // Horizontal segments (like digital 8)
-          pdf.line(innerLeftX + gap, topY, innerRightX - gap, topY);           // top
-          pdf.line(innerLeftX + gap, centerY, innerRightX - gap, centerY);     // middle
-          pdf.line(innerLeftX + gap, bottomY, innerRightX - gap, bottomY);     // bottom
+          // Vertical bars — sit between horizontal bar edges, no overlap
+          const vUpperTop = topY + SEG_BAR_THICK + SEG_BAR_GAP;
+          const vUpperH = (centerY - halfThick) - SEG_BAR_GAP - vUpperTop;
+          const vLowerTop = centerY + halfThick + SEG_BAR_GAP;
+          const vLowerH = (bottomY - SEG_BAR_THICK) - SEG_BAR_GAP - vLowerTop;
 
-          // Vertical segments (upper)
-          pdf.line(leftX, topY + gap, leftX, upperMidY - gap);                 // upper-left
-          pdf.line(rightX, topY + gap, rightX, upperMidY - gap);               // upper-right
-
-          // Vertical segments (lower)
-          pdf.line(leftX, lowerMidY + gap, leftX, bottomY - gap);              // lower-left
-          pdf.line(rightX, lowerMidY + gap, rightX, bottomY - gap);            // lower-right
-
-          // No position numbers below grids
+          // F (upper-left), B (upper-right)
+          pdf.rect(leftX, vUpperTop, SEG_BAR_THICK, vUpperH, 'F');
+          pdf.rect(rightX - SEG_BAR_THICK, vUpperTop, SEG_BAR_THICK, vUpperH, 'F');
+          // E (lower-left), C (lower-right)
+          pdf.rect(leftX, vLowerTop, SEG_BAR_THICK, vLowerH, 'F');
+          pdf.rect(rightX - SEG_BAR_THICK, vLowerTop, SEG_BAR_THICK, vLowerH, 'F');
         }
 
         yPosition += Math.ceil(exam.studentInfo.student_id_digits / squaresPerRow) * (squareHeight + squareSpacing + 6) + 4;
 
-        // Ensure we have room for the examples, otherwise move to a new page
         if (yPosition > pageHeight - bottomMargin - 40) {
           pdf.addPage();
           drawCornerMarkers(pdf);
           yPosition = topMargin;
         }
 
-        // Digital number examples (0–9) using the same "digital 8" style grid
         pdf.setFontSize(8);
-        pdf.text('Example digits (digital style):', 20, yPosition);
+        pdf.text('Example digits (darken bars like these):', 20, yPosition);
         yPosition += 5;
 
-        const digitWidth = 4.5;  // Smaller example
+        const digitWidth = 4.5;
         const digitHeight = 6;
         const digitSpacing = 2.5;
         const legendStartX = 20;
         const legendY = yPosition;
-
-        // Segment map for 7-seg style digits (A, B, C, D, E, F, G)
         const digitSegments: Record<number, string[]> = {
           0: ['A', 'B', 'C', 'E', 'F', 'G'],
           1: ['B', 'C'],
@@ -551,60 +553,52 @@ function AnswerSheetGenerator() {
           9: ['A', 'B', 'C', 'D', 'F', 'G'],
         };
 
+        const thickBar = (
+          pdfInst: jsPDF,
+          px: number,
+          py: number,
+          pw: number,
+          ph: number,
+          active: Set<string>
+        ) => {
+          // Scaled-down version of the main cell geometry (same non-overlapping layout)
+          const pad = 0.3;
+          const t = 0.6;  // bar thickness for legend (thinner since cells are smaller)
+          const g = 0.3;  // gap
+          const halfT = t / 2;
+
+          const topY = py + pad;
+          const bottomY = py + ph - pad;
+          const centerY = py + ph / 2;
+          const leftX = px + pad;
+          const rightX = px + pw - pad;
+
+          const drawBar = (bx: number, by: number, bw: number, bh: number, on: boolean) => {
+            pdfInst.setFillColor(on ? 0 : SEG_LIGHT_GRAY, on ? 0 : SEG_LIGHT_GRAY, on ? 0 : SEG_LIGHT_GRAY);
+            pdfInst.rect(bx, by, bw, bh, 'F');
+          };
+
+          // Horizontal bars: between vertical bar inner edges
+          const hX = leftX + t + g;
+          const hW = (rightX - t - g) - hX;
+          drawBar(hX, topY, hW, t, active.has('A'));
+          drawBar(hX, centerY - halfT, hW, t, active.has('D'));
+          drawBar(hX, bottomY - t, hW, t, active.has('G'));
+
+          // Vertical bars: between horizontal bar edges
+          const vUT = topY + t + g;
+          const vUH = (centerY - halfT) - g - vUT;
+          const vLT = centerY + halfT + g;
+          const vLH = (bottomY - t) - g - vLT;
+          drawBar(leftX, vUT, t, vUH, active.has('F'));
+          drawBar(rightX - t, vUT, t, vUH, active.has('B'));
+          drawBar(leftX, vLT, t, vLH, active.has('E'));
+          drawBar(rightX - t, vLT, t, vLH, active.has('C'));
+        };
+
         for (let d = 0; d <= 9; d++) {
-          const x = legendStartX + d * (digitWidth + digitSpacing);
-          const y = legendY;
-
-          const px = x;
-          const py = y;
-          const w = digitWidth;
-          const h = digitHeight;
-
-          const inset = 0.8;
-          const gap = 0.15; // segments nearly touch but don't overlap
-          const topY = py + inset;
-          const centerY = py + h / 2;
-          const bottomY = py + h - inset;
-
-          const leftX = px + inset;
-          const innerLeftX = px + w / 3;
-          const innerRightX = px + (2 * w) / 3;
-          const rightX = px + w - inset;
-
-          const active = new Set(digitSegments[d] || []);
-
-          pdf.setDrawColor(0, 0, 0); // Black for visibility
-          pdf.setLineWidth(0.3);
-
-          // Horizontals: A (top), D (middle), G (bottom)
-          if (active.has('A')) {
-            pdf.line(innerLeftX + gap, topY, innerRightX - gap, topY);
-          }
-          if (active.has('D')) {
-            pdf.line(innerLeftX + gap, centerY, innerRightX - gap, centerY);
-          }
-          if (active.has('G')) {
-            pdf.line(innerLeftX + gap, bottomY, innerRightX - gap, bottomY);
-          }
-
-          // Verticals: F (upper-left), B (upper-right), E (lower-left), C (lower-right)
-          const upperMidY = py + h / 3;
-          const lowerMidY = py + (2 * h) / 3;
-
-          if (active.has('F')) {
-            pdf.line(leftX, topY + gap, leftX, upperMidY - gap);
-          }
-          if (active.has('B')) {
-            pdf.line(rightX, topY + gap, rightX, upperMidY - gap);
-          }
-          if (active.has('E')) {
-            pdf.line(leftX, lowerMidY + gap, leftX, bottomY - gap);
-          }
-          if (active.has('C')) {
-            pdf.line(rightX, lowerMidY + gap, rightX, bottomY - gap);
-          }
-
-          // No numeric labels under example digits
+          const digX = legendStartX + d * (digitWidth + digitSpacing);
+          thickBar(pdf, digX, legendY, digitWidth, digitHeight, new Set(digitSegments[d] || []));
         }
 
         yPosition += digitHeight + 6;

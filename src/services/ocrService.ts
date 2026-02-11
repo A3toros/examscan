@@ -2,6 +2,7 @@
  * Advanced OCR and Computer Vision Service for ExamScan
  * Uses OpenCV with enhanced algorithms for better accuracy
  */
+import { PAGE_WIDTH_MM, PAGE_HEIGHT_MM, MARKER_MARGIN_MM, ID_CELL_WIDTH_MM, ID_CELL_HEIGHT_MM, ID_CELL_SPACING_MM, ID_CELL_ROW_EXTRA_GAP_MM, ID_CELLS_PER_ROW } from '../utils/pdfLayout';
 
 declare global {
   interface Window {
@@ -33,7 +34,7 @@ export interface OCRResult {
   processingTime: number;
   imageQuality: number;
   confidence: number;
-  // Dual detection results
+  // Dual detection results (bubbles)
   templateMethod?: {
     bubbles: BubbleDetectionResult[];
     confidence: number;
@@ -42,6 +43,10 @@ export interface OCRResult {
     bubbles: BubbleDetectionResult[];
     confidence: number;
   };
+  // Dual student ID methods (when student ID enabled)
+  recognizedNumbersBySegments?: NumberRecognitionResult[];
+  recognizedNumbersByTemplate?: NumberRecognitionResult[];
+  studentIdDebugSegmentBoxes?: Array<{ squareIndex: number; segments: Record<string, { x: number; y: number; w: number; h: number }> }>;
 }
 
 class OCRService {
@@ -185,11 +190,6 @@ class OCRService {
               detectionConfidence: Number(detectionConfidence.toFixed(4)),
               contourConfidence: Number(rawConfidence.toFixed(4))
             });
-            // Use Detection as primary if it has good confidence
-            if (detectionConfidence >= rawConfidence * 0.8) {
-              bubbles = detectionBubbles;
-              rawConfidence = detectionConfidence;
-            }
           }
         }
 
@@ -206,13 +206,6 @@ class OCRService {
               templateConfidence: Number(templateConfidence.toFixed(4)),
               detectionConfidence: Number(detectionConfidence.toFixed(4))
             });
-            // Only use template if detection failed or has very low confidence
-            if (detectionBubbles.length === 0 || detectionConfidence < 0.3) {
-              if (templateConfidence >= rawConfidence) {
-                bubbles = templateBubbles;
-                rawConfidence = templateConfidence;
-              }
-            }
           }
         } else if (alignedMat) {
           this.log('template:reject', {
@@ -221,6 +214,45 @@ class OCRService {
           });
         }
 
+        // FINAL METHOD SELECTION - pick whichever method has higher confidence
+        let finalBubbles: BubbleDetectionResult[];
+        let finalConfidence: number;
+        let methodUsed: string;
+
+        const detectionViable = detectionBubbles.length > 0 && detectionConfidence >= 0.5;
+        const templateViable = templateBubbles.length > 0 && templateConfidence >= 0.5;
+
+        if (detectionViable && templateViable) {
+          // Both viable → pick higher confidence
+          if (detectionConfidence >= templateConfidence) {
+            finalBubbles = detectionBubbles;
+            finalConfidence = detectionConfidence;
+            methodUsed = 'detection';
+          } else {
+            finalBubbles = templateBubbles;
+            finalConfidence = templateConfidence;
+            methodUsed = 'template';
+          }
+        } else if (detectionViable) {
+          finalBubbles = detectionBubbles;
+          finalConfidence = detectionConfidence;
+          methodUsed = 'detection';
+        } else if (templateViable) {
+          finalBubbles = templateBubbles;
+          finalConfidence = templateConfidence;
+          methodUsed = 'template';
+        } else {
+          finalBubbles = bubbles;
+          finalConfidence = rawConfidence;
+          methodUsed = 'contour';
+        }
+
+        this.log('method:selected', {
+          methodUsed,
+          confidence: finalConfidence,
+          bubbleCount: finalBubbles.length
+        });
+
         // Assess quality on grayscale image, not binary processed image
         const qualitySourceMat = alignedMat || sourceMat;
         const rawQuality = await this.assessImageQuality(qualitySourceMat);
@@ -228,8 +260,8 @@ class OCRService {
         return {
           processedImage,
           layout,
-          bubbles,
-          rawConfidence,
+          bubbles: finalBubbles,
+          rawConfidence: finalConfidence,
           rawQuality,
           alignedMat,
           templateAlignmentScore,
@@ -409,9 +441,63 @@ class OCRService {
   /**
    * Recognize a single digit in a square
    */
+  private createDigitTemplates(): any[] {
+    const cv = this.cv;
+    const size = OCRService.TEMPLATE_SIZE;
+    const templates: any[] = [];
+    const segOrder = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+    for (let d = 0; d <= 9; d++) {
+      const mat = new cv.Mat(size, size, cv.CV_8UC1);
+      mat.setTo(new cv.Scalar(255));
+      const onSegs = OCRService.DIGIT_SEGMENTS_ON[d];
+      if (onSegs) {
+        for (const s of segOrder) {
+          if (!onSegs.has(s)) continue;
+          const seg = OCRService.SEGMENT_ROI[s];
+          const x = Math.max(0, Math.floor(seg.x * size));
+          const y = Math.max(0, Math.floor(seg.y * size));
+          const w = Math.max(1, Math.min(size - x, Math.ceil(seg.w * size)));
+          const h = Math.max(1, Math.min(size - y, Math.ceil(seg.h * size)));
+          const roi = mat.roi(new cv.Rect(x, y, w, h));
+          roi.setTo(new cv.Scalar(0));
+          roi.delete();
+        }
+      }
+      templates.push(mat);
+    }
+    return templates;
+  }
+
+  private recognizeDigitByTemplateMatch(roi: any, templates: any[]): { digit: number | null; confidence: number } {
+    const cv = this.cv;
+    const size = OCRService.TEMPLATE_SIZE;
+    const resized = new cv.Mat();
+    cv.resize(roi, resized, new cv.Size(size, size), 0, 0, cv.INTER_LINEAR);
+    const normalized = new cv.Mat();
+    cv.normalize(resized, normalized, 0, 255, cv.NORM_MINMAX);
+    let bestDigit: number | null = null;
+    let bestVal = -2;
+    const resultMat = new cv.Mat();
+    for (let d = 0; d < templates.length; d++) {
+      cv.matchTemplate(normalized, templates[d], resultMat, cv.TM_CCOEFF_NORMED);
+      const minMax = cv.minMaxLoc(resultMat);
+      const val = minMax.maxVal;
+      if (val > bestVal) {
+        bestVal = val;
+        bestDigit = d;
+      }
+    }
+    resultMat.delete();
+    normalized.delete();
+    resized.delete();
+    const confidence = bestDigit !== null ? Math.max(0, Math.min(1, (bestVal + 1) / 2)) : 0;
+    return { digit: bestDigit, confidence };
+  }
+
   private async recognizeDigitInSquare(
     image: any,
-    square: any
+    square: any,
+    squareIndex?: number
   ): Promise<{ digit: number | null; confidence: number }> {
     const cv = this.cv;
 
@@ -420,7 +506,7 @@ class OCRService {
       const roi = image.roi(square);
 
       // Prefer 7-segment style recognition to match the template digits
-      const segmentResult = this.recognizeDigitBySegments(roi);
+      const segmentResult = this.recognizeDigitBySegments(roi, squareIndex);
       if (segmentResult.confidence >= 0.15 || segmentResult.digit !== null) {
         roi.delete();
         return segmentResult;
@@ -449,219 +535,324 @@ class OCRService {
     }
   }
 
-  private recognizeDigitBySegments(roi: any): { digit: number | null; confidence: number } {
+  /**
+   * 7-segment layout: relative geometry matching PDF thick bars (longer bars: 12–88% width, verticals to center).
+   */
+  /**
+   * 7-segment ROI: non-overlapping boxes.
+   * Digits in the PDF cells have internal padding, so the actual strokes are
+   * roughly in the inner 70% of the cell. Coordinates are relative fractions
+   * of the digit-cell bounding box (0–1).
+   *
+   * Layout (classic 7-segment):
+   *   ──A──
+   *  |     |
+   *  F     B
+   *  |     |
+   *   ──D──
+   *  |     |
+   *  E     C
+   *  |     |
+   *   ──G──
+   */
+  private static readonly SEGMENT_ROI: Record<string, { x: number; y: number; w: number; h: number }> = {
+    // Digit centered in cell with heavy padding. F reads ink at y=0.20,
+    // so actual digit spans ~y 0.20–0.76. Bars must be INSIDE that range.
+    A: { x: 0.22, y: 0.20, w: 0.56, h: 0.08 },  // Top bar  (was 0.12)
+    D: { x: 0.22, y: 0.44, w: 0.56, h: 0.12 },  // Middle bar
+    G: { x: 0.22, y: 0.64, w: 0.56, h: 0.08 },  // Bottom bar (was 0.72)
+    B: { x: 0.68, y: 0.26, w: 0.24, h: 0.18 },  // Top-right vertical
+    C: { x: 0.68, y: 0.52, w: 0.24, h: 0.18 },  // Bottom-right vertical
+    F: { x: 0.08, y: 0.26, w: 0.24, h: 0.18 },  // Top-left vertical
+    E: { x: 0.08, y: 0.52, w: 0.24, h: 0.18 },  // Bottom-left vertical
+  };
+
+  /** Digit lookup A B C D E F G → digit. Matches generator digitSegments (0=ABCEFG, 1=BC, …). */
+  private static readonly DIGITS: Record<string, number> = {
+    '1110111': 0,
+    '0110000': 1,
+    '1101101': 2,
+    '1111001': 3,
+    '0111010': 4,
+    '1101011': 5,
+    '1101111': 6,
+    '1110000': 7,
+    '1111111': 8,
+    '1111011': 9,
+  };
+
+  /** Minimum soft score to accept a digit. Lowered for real-world lighting (was 14). */
+  private static readonly SEGMENT_SOFT_MIN_SCORE = 8;
+  /** Cap segment contrast so one hot spot does not dominate; allow more dynamic range (was 45). */
+  private static readonly SEGMENT_CONTRAST_CAP = 60;
+  /** Require at least one segment with contrast >= STRONG_THRESHOLD (avoids pure noise). */
+  private static readonly SEGMENT_STRONG_MIN = 1;
+  /** Lowered so more digits pass when one segment is clearly dark (was 12). */
+  private static readonly SEGMENT_STRONG_THRESHOLD = 6;
+
+  /** Normalize digit cell (0–255) before segment test. */
+  private static readonly NORMALIZE_DIGIT_CELL = true;
+
+  private static readonly TEMPLATE_SIZE = 21;
+
+  /** Expected segments ON per digit (A..G). Derived from DIGITS. */
+  private static readonly DIGIT_SEGMENTS_ON: Record<number, Set<string>> = (() => {
+    const segOrder = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+    const out: Record<number, Set<string>> = {};
+    for (const [bits, d] of Object.entries(OCRService.DIGITS)) {
+      out[d] = new Set(segOrder.filter((_, i) => bits[i] === '1'));
+    }
+    return out;
+  })();
+
+  /** Background strips for horizontal segment: above and below, outside the segment. */
+  private static backgroundStripsHorizontal(
+    rx: number,
+    ry: number,
+    rw: number,
+    rh: number,
+    imgW: number,
+    imgH: number
+  ): Array<{ x: number; y: number; w: number; h: number }> {
+    const pad = Math.max(2, Math.round(rh * 1.8));
+    const strips: Array<{ x: number; y: number; w: number; h: number }> = [];
+    const aboveY = Math.max(0, ry - pad);
+    const aboveH = ry - aboveY;
+    if (aboveH >= 2) strips.push({ x: rx, y: aboveY, w: rw, h: aboveH });
+    const belowY = ry + rh;
+    const belowH = Math.min(pad, imgH - belowY);
+    if (belowH >= 2) strips.push({ x: rx, y: belowY, w: rw, h: belowH });
+    return strips;
+  }
+
+  /** Background strips for vertical segment: left and right, outside the segment. */
+  private static backgroundStripsVertical(
+    rx: number,
+    ry: number,
+    rw: number,
+    rh: number,
+    imgW: number,
+    imgH: number
+  ): Array<{ x: number; y: number; w: number; h: number }> {
+    const pad = Math.max(2, Math.round(rw * 1.8));
+    const strips: Array<{ x: number; y: number; w: number; h: number }> = [];
+    const leftX = Math.max(0, rx - pad);
+    const leftW = rx - leftX;
+    if (leftW >= 2) strips.push({ x: leftX, y: ry, w: leftW, h: rh });
+    const rightX = rx + rw;
+    const rightW = Math.min(pad, imgW - rightX);
+    if (rightW >= 2) strips.push({ x: rightX, y: ry, w: rightW, h: rh });
+    return strips;
+  }
+
+  /** Return contrast (bgMean - segMean) for one segment. Positive = segment darker than background. */
+  private segmentContrast(
+    gray: any,
+    box: { x: number; y: number; w: number; h: number },
+    seg: { x: number; y: number; w: number; h: number },
+    isHorizontal: boolean
+  ): number {
     const cv = this.cv;
-    const width = roi.cols;
-    const height = roi.rows;
+    const cols = gray.cols;
+    const rows = gray.rows;
+    let rx = Math.round(box.x + seg.x * box.w);
+    let ry = Math.round(box.y + seg.y * box.h);
+    let rw = Math.max(1, Math.round(seg.w * box.w));
+    let rh = Math.max(1, Math.round(seg.h * box.h));
+    rx = Math.max(0, Math.min(rx, cols - 1));
+    ry = Math.max(0, Math.min(ry, rows - 1));
+    rw = Math.min(rw, cols - rx);
+    rh = Math.min(rh, rows - ry);
+    if (rw < 1 || rh < 1) return 0;
 
-    if (width < 10 || height < 10) {
-      return { digit: null, confidence: 0 };
+    const segRoi = gray.roi(new cv.Rect(rx, ry, rw, rh));
+    const segMean = cv.mean(segRoi)[0];
+    segRoi.delete();
+
+    const strips = isHorizontal
+      ? OCRService.backgroundStripsHorizontal(rx, ry, rw, rh, cols, rows)
+      : OCRService.backgroundStripsVertical(rx, ry, rw, rh, cols, rows);
+    let bgSum = 0;
+    let n = 0;
+    for (const s of strips) {
+      const r = gray.roi(new cv.Rect(s.x, s.y, s.w, s.h));
+      bgSum += cv.mean(r)[0];
+      r.delete();
+      n++;
     }
+    const bgMean = n > 0 ? bgSum / n : segMean;
+    return bgMean - segMean;
+  }
 
-    const blurred = new cv.Mat();
-    cv.GaussianBlur(roi, blurred, new cv.Size(3, 3), 0);
-
-    const thresh = new cv.Mat();
-    cv.threshold(blurred, thresh, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-
-    const segmentRects = this.getSegmentRegions(width, height);
-    const segmentDarkness: Record<string, number> = {};
-
-    for (const [segment, rect] of Object.entries(segmentRects)) {
-      const region = thresh.roi(rect);
-      const total = rect.width * rect.height;
-      const filled = cv.countNonZero(region);
-      const darkness = total > 0 ? filled / total : 0;
-      segmentDarkness[segment] = darkness;
-      region.delete();
-    }
-
-    thresh.delete();
-    blurred.delete();
-
-    const maxDarkness = Math.max(...Object.values(segmentDarkness));
-    const minDarkness = Math.min(...Object.values(segmentDarkness));
-    const avgDarkness = Object.values(segmentDarkness).reduce((a, b) => a + b, 0) / Object.keys(segmentDarkness).length;
-    
-    // Use very low threshold - handwritten digits are faint
-    // Also use weighted scoring instead of binary active/inactive
-    const absoluteThreshold = 0.05; // Very low absolute threshold
-    const relativeThreshold = maxDarkness * 0.15; // Lower relative threshold (15% instead of 30%)
-    const activationThreshold = Math.max(absoluteThreshold, relativeThreshold);
-    
-    this.log('studentId:segment', {
-      segments: segmentDarkness,
-      activationThreshold: Number(activationThreshold.toFixed(3)),
-      maxDarkness: Number(maxDarkness.toFixed(3)),
-      minDarkness: Number(minDarkness.toFixed(3)),
-      avgDarkness: Number(avgDarkness.toFixed(3))
+  /** Classify digit by soft scoring: score(d) = sum(contrast for expected ON) - sum(contrast for expected OFF). */
+  private classifyDigit(
+    gray: any,
+    box: { x: number; y: number; w: number; h: number },
+    debugSquareIndex?: number
+  ): { digit: number | null; confidence: number; bits: string } {
+    const HORIZONTAL = new Set(['A', 'D', 'G']);
+    const segOrder = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+    const contrasts: Record<string, number> = {};
+    segOrder.forEach((s) => {
+      contrasts[s] = this.segmentContrast(gray, box, OCRService.SEGMENT_ROI[s], HORIZONTAL.has(s));
     });
+    const cap = (v: number) => Math.min(OCRService.SEGMENT_CONTRAST_CAP, Math.max(0, v));
+    const capped: Record<string, number> = {};
+    segOrder.forEach((s) => { capped[s] = cap(contrasts[s]); });
 
-    if (maxDarkness < 0.03) {
-      return { digit: null, confidence: 0 };
-    }
-
-    // Use weighted segments: segments with darkness > threshold are "strong", 
-    // segments with darkness > threshold*0.5 are "weak"
-    const strongSegments = Object.entries(segmentDarkness)
-      .filter(([, darkness]) => darkness >= activationThreshold)
-      .map(([segment]) => segment);
-    const weakSegments = Object.entries(segmentDarkness)
-      .filter(([, darkness]) => darkness >= activationThreshold * 0.5 && darkness < activationThreshold)
-      .map(([segment]) => segment);
-    
-    // Use both strong and weak segments for matching
-    const activeSegments = [...strongSegments, ...weakSegments];
-
-    if (activeSegments.length === 0) {
-      return { digit: null, confidence: 0 };
-    }
-
-    const digitSegments: Record<number, string[]> = {
-      0: ['A', 'B', 'C', 'E', 'F', 'G'],
-      1: ['B', 'C'],
-      2: ['A', 'B', 'D', 'E', 'G'],
-      3: ['A', 'B', 'C', 'D', 'G'],
-      4: ['B', 'C', 'D', 'F'],
-      5: ['A', 'C', 'D', 'F', 'G'],
-      6: ['A', 'C', 'D', 'E', 'F', 'G'],
-      7: ['A', 'B', 'C'],
-      8: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
-      9: ['A', 'B', 'C', 'D', 'F', 'G'],
-    };
+    const bitThreshold = 5;
+    const bits = segOrder.map((s) => (contrasts[s] >= bitThreshold ? '1' : '0')).join('');
 
     let bestDigit: number | null = null;
     let bestScore = -Infinity;
-    let bestMatches = 0;
-    let bestStrongMatches = 0;
-    let bestWeakMatches = 0;
-    const strongSet = new Set(strongSegments);
-    const weakSet = new Set(weakSegments);
-    const allActiveSet = new Set(activeSegments);
-    const digitScores: Record<number, { score: number; matches: number; missing: number; extra: number; strongMatches: number; weakMatches: number }> = {};
-
-    for (const [digit, segments] of Object.entries(digitSegments)) {
-      const expected = new Set(segments);
-      let strongMatches = 0;
-      let weakMatches = 0;
-      let missing = 0;
-      let extra = 0;
-      
-      // Count matches: strong segments count more than weak
-      for (const seg of expected) {
-        if (strongSet.has(seg)) {
-          strongMatches++;
-        } else if (weakSet.has(seg)) {
-          weakMatches++;
-        } else {
-          missing++;
-        }
-      }
-      
-      // Count extra segments (not expected) - penalize less if they're weak
-      for (const seg of allActiveSet) {
-        if (!expected.has(seg)) {
-          if (strongSet.has(seg)) {
-            extra += 1; // Strong extra segment
-          } else {
-            extra += 0.5; // Weak extra segment - less penalty
-          }
-        }
-      }
-      
-      // Score: heavily reward strong matches, moderately reward weak matches
-      // Lightly penalize missing/extra (handles partial fills and misalignment)
-      const matches = strongMatches + weakMatches;
-      const score = (strongMatches * 3) + (weakMatches * 1.5) - (missing * 0.15) - (extra * 0.2);
-      digitScores[Number(digit)] = { score, matches, missing, extra, strongMatches, weakMatches };
-      
+    for (let d = 0; d <= 9; d++) {
+      const onSegs = OCRService.DIGIT_SEGMENTS_ON[d];
+      if (!onSegs) continue;
+      const onList = segOrder.filter((s) => onSegs.has(s));
+      const offList = segOrder.filter((s) => !onSegs.has(s));
+      const sumOn = onList.reduce((sum, s) => sum + capped[s], 0);
+      const sumOff = offList.reduce((sum, s) => sum + capped[s], 0);
+      const avgOn = onList.length > 0 ? sumOn / onList.length : 0;
+      const avgOff = offList.length > 0 ? sumOff / offList.length : 0;
+      const score = avgOn - avgOff;
       if (score > bestScore) {
         bestScore = score;
-        bestMatches = matches;
-        bestStrongMatches = strongMatches;
-        bestWeakMatches = weakMatches;
-        bestDigit = Number(digit);
+        bestDigit = d;
       }
     }
-    
-    // Log top 3 candidates for debugging
-    const sortedScores = Object.entries(digitScores)
-      .sort(([, a], [, b]) => b.score - a.score)
-      .slice(0, 3);
-    this.log('studentId:segment:scores', {
-      strongSegments,
-      weakSegments,
-      activeSegments,
-      topCandidates: sortedScores.map(([digit, data]) => ({
-        digit: Number(digit),
-        score: Number(data.score.toFixed(2)),
-        strongMatches: data.strongMatches,
-        weakMatches: data.weakMatches,
-        totalMatches: data.matches,
-        missing: data.missing,
-        extra: Number(data.extra.toFixed(1))
-      }))
-    });
 
-    // Require at least 1 match
-    if (bestMatches < 1 || bestDigit === null) {
-      return { digit: null, confidence: 0 };
+    const strongCount = bestDigit !== null
+      ? segOrder.filter((s) => OCRService.DIGIT_SEGMENTS_ON[bestDigit!]?.has(s) && contrasts[s] >= OCRService.SEGMENT_STRONG_THRESHOLD).length
+      : 0;
+    let accept = bestDigit !== null
+      && bestScore >= OCRService.SEGMENT_SOFT_MIN_SCORE
+      && strongCount >= OCRService.SEGMENT_STRONG_MIN;
+    if (!accept && bestDigit !== null && strongCount === 1 && bestScore >= 5) {
+      const onSegs = OCRService.DIGIT_SEGMENTS_ON[bestDigit];
+      const strongSegment = segOrder.find((s) => onSegs?.has(s) && contrasts[s] >= OCRService.SEGMENT_STRONG_THRESHOLD);
+      const offContrastMax = segOrder
+        .filter((s) => !onSegs?.has(s))
+        .reduce((m, s) => Math.max(m, contrasts[s]), -Infinity);
+      if (strongSegment !== undefined && offContrastMax < 15) {
+        accept = true;
+      }
     }
-    
-    // Confidence: base on matches and score
-    // New scoring: (strongMatches * 3) + (weakMatches * 1.5) - (missing * 0.15) - (extra * 0.2)
-    const expectedSegments = digitSegments[bestDigit]?.length || 7;
-    // Max score: all expected segments are strong matches
-    const maxPossibleScore = expectedSegments * 3;
-    // Min score: all wrong (all missing, some extra)
-    const minPossibleScore = -(expectedSegments * 0.15) - (expectedSegments * 0.2);
-    
-    // Normalize score to 0-1 range
-    const scoreRange = maxPossibleScore - minPossibleScore;
-    const normalizedScore = scoreRange > 0 ? Math.max(0, Math.min(1, (bestScore - minPossibleScore) / scoreRange)) : 0;
-    
-    // Match ratio: weight strong matches more
-    const weightedMatchRatio = (bestStrongMatches * 1.0 + bestWeakMatches * 0.5) / expectedSegments;
-    
-    // Combine normalized score (50%) and weighted match ratio (50%)
-    const confidence = Math.max(0, Math.min(1, normalizedScore * 0.5 + weightedMatchRatio * 0.5));
-    
-    // Return digit if confidence is reasonable (lowered threshold)
-    const minConfidence = 0.05; // Lower threshold to accept more digits
-    if (confidence < minConfidence && bestDigit !== null) {
-      this.log('studentId:segment:lowConfidence', {
-        digit: bestDigit,
-        confidence: Number(confidence.toFixed(3)),
-        activeSegments,
-        bestScore: Number(bestScore.toFixed(2)),
-        bestMatches
-      });
-    }
-    
-    return { digit: confidence >= minConfidence ? bestDigit : null, confidence };
+    const digit = accept ? bestDigit : null;
+    const confidence = accept ? (strongCount >= 2 ? Math.min(1, bestScore / 25) : 0.4) : 0;
+    this.log('studentId:segment', {
+      bits,
+      digit,
+      confidence: Number(confidence.toFixed(2)),
+      bestScore: Math.round(bestScore * 10) / 10,
+      strongCount: bestDigit !== null ? strongCount : 0,
+      contrasts: segOrder.reduce((o, s) => ({ ...o, [s]: Math.round(contrasts[s] * 10) / 10 }), {} as Record<string, number>)
+    });
+    this.log('studentId:segment:detail', {
+      squareIndex: debugSquareIndex,
+      bits,
+      digit,
+      rawContrasts: segOrder.reduce((o, s) => ({ ...o, [s]: Math.round(contrasts[s] * 10) / 10 }), {} as Record<string, number>),
+      cappedContrasts: segOrder.reduce((o, s) => ({ ...o, [s]: Math.round(capped[s] * 10) / 10 }), {} as Record<string, number>),
+      bestScore: Math.round(bestScore * 10) / 10,
+      strongCount: bestDigit !== null ? strongCount : 0,
+      accepted: accept
+    });
+    return { digit, confidence, bits };
   }
 
-  private getSegmentRegions(width: number, height: number): Record<string, any> {
-    // Make segments slightly larger and more centered to better capture handwritten digits
-    const segmentThicknessX = Math.max(3, Math.round(width * 0.15)); // Increased from 0.12
-    const segmentThicknessY = Math.max(3, Math.round(height * 0.15)); // Increased from 0.12
-    const centerX = Math.round(width / 2);
-    const topY = Math.round(height * 0.12); // Moved up slightly from 0.14
-    const midY = Math.round(height * 0.50);
-    const bottomY = Math.round(height * 0.88); // Moved down slightly from 0.86
-    const leftX = Math.round(width * 0.08); // Moved in from 0.12
-    const rightX = Math.round(width * 0.80); // Moved in from 0.76
+  private matToDataURL(mat: any): string {
+    const cv = this.cv;
+    const canvas = document.createElement('canvas');
+    cv.imshow(canvas, mat);
+    return canvas.toDataURL();
+  }
 
+  private recognizeDigitBySegments(roi: any, squareIndex?: number): { digit: number | null; confidence: number } {
+    const cv = this.cv;
+    const width = roi.cols;
+    const height = roi.rows;
+    if (width < 10 || height < 10) {
+      return { digit: null, confidence: 0 };
+    }
+    const box = { x: 0, y: 0, w: width, h: height };
+
+    if (this.debug && width >= 10 && height >= 10) {
+      const visual = new cv.Mat();
+      cv.cvtColor(roi, visual, cv.COLOR_GRAY2BGR);
+      const segmentColors: Record<string, [number, number, number]> = {
+        A: [0, 0, 255],
+        B: [0, 255, 0],
+        C: [255, 0, 0],
+        D: [0, 255, 255],
+        E: [255, 0, 255],
+        F: [255, 255, 0],
+        G: [128, 128, 128]
+      };
+      Object.entries(OCRService.SEGMENT_ROI).forEach(([name, seg]) => {
+        const rx = Math.round(box.x + seg.x * box.w);
+        const ry = Math.round(box.y + seg.y * box.h);
+        const rw = Math.max(1, Math.round(seg.w * box.w));
+        const rh = Math.max(1, Math.round(seg.h * box.h));
+        const color = segmentColors[name] ?? [255, 255, 255];
+        cv.rectangle(
+          visual,
+          new cv.Point(rx, ry),
+          new cv.Point(rx + rw, ry + rh),
+          new cv.Scalar(color[0], color[1], color[2]),
+          2
+        );
+        cv.putText(
+          visual,
+          name,
+          new cv.Point(rx + 2, ry + 12),
+          cv.FONT_HERSHEY_SIMPLEX,
+          0.4,
+          new cv.Scalar(color[0], color[1], color[2]),
+          1
+        );
+      });
+      this.log('studentId:segmentVisualization', {
+        squareIndex: squareIndex ?? -1,
+        imageData: this.matToDataURL(visual)
+      });
+      visual.delete();
+    }
+
+    let gray: any = roi;
+    let toDelete: any = null;
+    const normalized = new cv.Mat();
+    cv.normalize(roi, normalized, 0, 255, cv.NORM_MINMAX);
+    gray = normalized;
+    toDelete = normalized;
+    if (typeof (cv as any).createCLAHE === 'function') {
+      try {
+        const clahe = (cv as any).createCLAHE(2.0, new cv.Size(8, 8));
+        const equalized = new cv.Mat();
+        clahe.apply(gray, equalized);
+        if (toDelete) toDelete.delete();
+        toDelete = equalized;
+        gray = equalized;
+        if (typeof clahe.delete === 'function') clahe.delete();
+      } catch {
+        // CLAHE not available or failed
+      }
+    }
+    if (typeof cv.bilateralFilter === 'function') {
+      try {
+        const filtered = new cv.Mat();
+        cv.bilateralFilter(gray, filtered, 9, 75, 75);
+        if (toDelete) toDelete.delete();
+        toDelete = filtered;
+        gray = filtered;
+      } catch {
+        if (toDelete && toDelete !== gray) toDelete.delete();
+      }
+    }
+    const { digit, confidence } = this.classifyDigit(gray, box, squareIndex);
+    if (toDelete) toDelete.delete();
     return {
-      // Horizontal segments: wider coverage
-      A: new this.cv.Rect(centerX - Math.round(width * 0.25), topY - Math.round(segmentThicknessY / 2), Math.round(width * 0.5), segmentThicknessY),
-      D: new this.cv.Rect(centerX - Math.round(width * 0.25), midY - Math.round(segmentThicknessY / 2), Math.round(width * 0.5), segmentThicknessY),
-      G: new this.cv.Rect(centerX - Math.round(width * 0.25), bottomY - Math.round(segmentThicknessY / 2), Math.round(width * 0.5), segmentThicknessY),
-      // Vertical segments: taller coverage
-      F: new this.cv.Rect(leftX, topY - Math.round(height * 0.05), segmentThicknessX, Math.round(height * 0.35)),
-      B: new this.cv.Rect(rightX, topY - Math.round(height * 0.05), segmentThicknessX, Math.round(height * 0.35)),
-      E: new this.cv.Rect(leftX, midY - Math.round(height * 0.05), segmentThicknessX, Math.round(height * 0.35)),
-      C: new this.cv.Rect(rightX, midY - Math.round(height * 0.05), segmentThicknessX, Math.round(height * 0.35)),
+      digit,
+      confidence: digit !== null ? confidence : 0,
     };
   }
 
@@ -861,12 +1052,13 @@ class OCRService {
       // Get regular OCR results
       const ocrResult = await this.processAnswerSheet(imageData, questionTypes, layoutConfig);
 
-      // Recognize student ID numbers
-      let recognizedNumbers = await this.recognizeStudentIdFromTemplate(
+      // Recognize student ID numbers (both methods)
+      const segmentOut = await this.recognizeStudentIdFromTemplate(
         imageData,
         studentIdDigits,
         layoutConfig
       );
+      let recognizedNumbers = segmentOut.results;
 
       if (recognizedNumbers.length === 0) {
         recognizedNumbers = await this.recognizeNumbersInSquares(
@@ -875,15 +1067,97 @@ class OCRService {
         );
       }
 
+      const byTemplate = await this.recognizeStudentIdByTemplateMatch(
+        imageData,
+        studentIdDigits,
+        layoutConfig
+      );
+
       return {
         ...ocrResult,
-        recognizedNumbers,
+        recognizedNumbers: recognizedNumbers.length >= byTemplate.length ? recognizedNumbers : byTemplate,
+        recognizedNumbersBySegments: recognizedNumbers,
+        recognizedNumbersByTemplate: byTemplate.length > 0 ? byTemplate : undefined,
+        studentIdDebugSegmentBoxes: segmentOut.debugSegmentBoxes,
         processingTime: Date.now() - startTime
       };
 
     } catch (error) {
       console.error('OCR processing with student ID failed:', error);
       throw new Error(`OCR processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async recognizeStudentIdByTemplateMatch(
+    imageData: ImageData | HTMLImageElement | string,
+    studentIdDigits: number,
+    layoutConfig?: { studentInfoEnabled?: boolean; studentIdEnabled?: boolean; studentIdDigits?: number }
+  ): Promise<NumberRecognitionResult[]> {
+    const cv = this.cv;
+    const results: NumberRecognitionResult[] = [];
+    try {
+      let mat = await this.imageDataToMat(imageData);
+      const maxDim = 3500;
+      if (Math.max(mat.cols, mat.rows) > maxDim) {
+        const scale = maxDim / Math.max(mat.cols, mat.rows);
+        const resized = new cv.Mat();
+        cv.resize(mat, resized, new cv.Size(Math.round(mat.cols * scale), Math.round(mat.rows * scale)), 0, 0, cv.INTER_AREA);
+        mat.delete();
+        mat = resized;
+      }
+      const processed = await this.preprocessImage(mat);
+      const corners = this.detectCornerMarkers(processed);
+      let alignedMat = mat;
+      if (corners) {
+        const warped = this.warpToTemplate(mat, corners);
+        if (warped) alignedMat = warped;
+      }
+      const gray = new cv.Mat();
+      cv.cvtColor(alignedMat, gray, cv.COLOR_RGBA2GRAY);
+      const scale = alignedMat.cols / 210;
+      const baseSquares = this.getStudentIdTemplateSquares(scale, layoutConfig, studentIdDigits);
+      const mm = (v: number) => v * scale;
+      let bestShiftX = 0, bestShiftY = 0, bestScore = -1;
+      for (const sx of [-2, -1, 0, 1, 2].map((v) => mm(v))) {
+        for (const sy of [-1, 0, 1].map((v) => mm(v))) {
+          let score = 0;
+          for (const sq of baseSquares) {
+            const x = Math.round(sq.x + sx), y = Math.round(sq.y + sy), w = Math.round(sq.width), h = Math.round(sq.height);
+            if (x < 0 || y < 0 || x + w > gray.cols || y + h > gray.rows) continue;
+            const roi = gray.roi(new cv.Rect(x, y, w, h));
+            score += cv.mean(roi)[0];
+            roi.delete();
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestShiftX = sx;
+            bestShiftY = sy;
+          }
+        }
+      }
+      const squares = baseSquares.map((sq) => ({ x: sq.x + bestShiftX, y: sq.y + bestShiftY, width: sq.width, height: sq.height }));
+      const templates = this.createDigitTemplates();
+      for (const square of squares) {
+        const x = Math.max(0, Math.min(gray.cols - 1, Math.round(square.x)));
+        const y = Math.max(0, Math.min(gray.rows - 1, Math.round(square.y)));
+        const w = Math.max(1, Math.min(gray.cols - x, Math.round(square.width)));
+        const h = Math.max(1, Math.min(gray.rows - y, Math.round(square.height)));
+        if (w <= 1 || h <= 1) {
+          results.push({ square: { x, y, width: w, height: h }, digit: null, confidence: 0 });
+          continue;
+        }
+        const roi = gray.roi(new cv.Rect(x, y, w, h));
+        const { digit, confidence } = this.recognizeDigitByTemplateMatch(roi, templates);
+        roi.delete();
+        results.push({ square: { x, y, width: w, height: h }, digit, confidence });
+      }
+      templates.forEach((t) => t.delete());
+      gray.delete();
+      if (alignedMat !== mat) alignedMat.delete();
+      mat.delete();
+      return results;
+    } catch (e) {
+      return [];
     }
   }
 
@@ -895,9 +1169,11 @@ class OCRService {
       studentIdEnabled?: boolean;
       studentIdDigits?: number;
     }
-  ): Promise<NumberRecognitionResult[]> {
+  ): Promise<{ results: NumberRecognitionResult[]; debugSegmentBoxes?: Array<{ squareIndex: number; segments: Record<string, { x: number; y: number; w: number; h: number }> }> }> {
     const cv = this.cv;
     const results: NumberRecognitionResult[] = [];
+    const debugSegmentBoxes: Array<{ squareIndex: number; segments: Record<string, { x: number; y: number; w: number; h: number }> }> = [];
+    const segOrder = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 
     try {
       let mat = await this.imageDataToMat(imageData);
@@ -931,19 +1207,64 @@ class OCRService {
       const gray = new cv.Mat();
       cv.cvtColor(alignedMat, gray, cv.COLOR_RGBA2GRAY);
 
-      // Scale: template assumes A4 width = 210mm
-      const scale = alignedMat.cols / 210; // 210mm = A4 width
-      const squares = this.getStudentIdTemplateSquares(scale, layoutConfig, studentIdDigits);
-      this.log('studentId:template:squares', { count: squares.length, squares });
+      const scale = alignedMat.cols / 210;
+      const baseSquares = this.getStudentIdTemplateSquares(scale, layoutConfig, studentIdDigits);
+      const mm = (v: number) => v * scale;
 
-      for (const square of squares) {
+      const shiftCandidatesX = [-2, -1, 0, 1, 2].map((v) => mm(v));
+      const shiftCandidatesY = [-1, 0, 1].map((v) => mm(v));
+      let bestShiftX = 0;
+      let bestShiftY = 0;
+      let bestScore = -1;
+      for (const sx of shiftCandidatesX) {
+        for (const sy of shiftCandidatesY) {
+          let score = 0;
+          for (const sq of baseSquares) {
+            const x = Math.round(sq.x + sx);
+            const y = Math.round(sq.y + sy);
+            const w = Math.round(sq.width);
+            const h = Math.round(sq.height);
+            if (x < 0 || y < 0 || x + w > gray.cols || y + h > gray.rows) continue;
+            const roi = gray.roi(new cv.Rect(x, y, w, h));
+            const mean = cv.mean(roi)[0];
+            const meanSq = new cv.Mat();
+            cv.multiply(roi, roi, meanSq);
+            const meanOfSq = cv.mean(meanSq)[0];
+            meanSq.delete();
+            roi.delete();
+            const variance = meanOfSq - mean * mean;
+            score += variance;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestShiftX = sx;
+            bestShiftY = sy;
+          }
+        }
+      }
+
+      const squares = baseSquares.map((sq) => ({
+        x: sq.x + bestShiftX,
+        y: sq.y + bestShiftY,
+        width: sq.width,
+        height: sq.height
+      }));
+      this.log('studentId:template:squares', {
+        count: squares.length,
+        shiftXmm: Number((bestShiftX / scale).toFixed(2)),
+        shiftYmm: Number((bestShiftY / scale).toFixed(2)),
+        squares
+      });
+
+      for (let squareIndex = 0; squareIndex < squares.length; squareIndex++) {
+        const square = squares[squareIndex];
         const x = Math.max(0, Math.min(gray.cols - 1, Math.round(square.x)));
         const y = Math.max(0, Math.min(gray.rows - 1, Math.round(square.y)));
         const w = Math.max(1, Math.min(gray.cols - x, Math.round(square.width)));
         const h = Math.max(1, Math.min(gray.rows - y, Math.round(square.height)));
         if (w <= 1 || h <= 1) continue;
 
-        const digit = await this.recognizeDigitInSquare(gray, new cv.Rect(x, y, w, h));
+        const digit = await this.recognizeDigitInSquare(gray, new cv.Rect(x, y, w, h), squareIndex);
         this.log('studentId:template:digit', {
           square: { x, y, width: w, height: h },
           digit: digit.digit,
@@ -954,6 +1275,17 @@ class OCRService {
           digit: digit.digit,
           confidence: digit.confidence
         });
+        const segBoxes: Record<string, { x: number; y: number; w: number; h: number }> = {};
+        segOrder.forEach((s) => {
+          const seg = OCRService.SEGMENT_ROI[s];
+          segBoxes[s] = {
+            x: x + Math.round(seg.x * w),
+            y: y + Math.round(seg.y * h),
+            w: Math.max(1, Math.round(seg.w * w)),
+            h: Math.max(1, Math.round(seg.h * h))
+          };
+        });
+        debugSegmentBoxes.push({ squareIndex, segments: segBoxes });
       }
 
       gray.delete();
@@ -967,10 +1299,10 @@ class OCRService {
         this.lastGray = null;
       }
 
-      return results;
+      return { results, debugSegmentBoxes };
     } catch (error) {
       console.error('Student ID template recognition failed:', error);
-      return [];
+      return { results: [] };
     }
   }
 
@@ -992,22 +1324,23 @@ class OCRService {
     }
 
     if (layoutConfig?.studentIdEnabled !== false) {
-      yPosition += mm(8); // PDF: after "Student ID:" text (yPosition += 8)
+      yPosition += mm(6); // PDF: "Student ID:" line height
+      yPosition += mm(8); // PDF: instruction line ("Darken the bars...")
     }
 
     const digits = studentIdDigits || layoutConfig?.studentIdDigits || 6;
-    const squareWidth = mm(5.5); // PDF: squareWidth = 5.5
-    const squareHeight = mm(7); // PDF: squareHeight = 7
-    const squareSpacing = mm(1); // PDF: squareSpacing = 1
-    const extraRowGap = mm(5); // PDF: +5 in row calculation
-    const startX = mm(20); // PDF: startX = 20 (Dashboard) or 30 (AnswerSheetGenerator - FIXED to 20)
-    const squaresPerRow = 10; // PDF: squaresPerRow = 10
+    const squareWidth = mm(ID_CELL_WIDTH_MM);       // 7mm (shared constant)
+    const squareHeight = mm(ID_CELL_HEIGHT_MM);     // 10mm (shared constant)
+    const squareSpacing = mm(ID_CELL_SPACING_MM);   // 1.5mm (shared constant)
+    const extraRowGap = mm(ID_CELL_ROW_EXTRA_GAP_MM); // 5mm (shared constant)
+    const startX = mm(20);
+    const squaresPerRow = ID_CELLS_PER_ROW;         // 10 (shared constant)
 
     this.log('studentId:template:calc', {
       scale: Number(scale.toFixed(4)),
       initialY: Number((mm(34) / scale).toFixed(2)),
       afterStudentInfo: layoutConfig?.studentInfoEnabled !== false ? Number((mm(10) / scale).toFixed(2)) : 0,
-      afterStudentIdLabel: layoutConfig?.studentIdEnabled !== false ? Number((mm(8) / scale).toFixed(2)) : 0,
+      afterStudentIdLabel: layoutConfig?.studentIdEnabled !== false ? 14 : 0,
       finalYmm: Number((yPosition / scale).toFixed(2)),
       startXmm: Number((startX / scale).toFixed(2)),
       squareWidthmm: Number((squareWidth / scale).toFixed(2)),
@@ -1626,7 +1959,7 @@ class OCRService {
     const jitter = mm(1.2);
     const jitterStep = mm(0.6);
     const shiftCandidatesX = [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10].map(mm);
-    const shiftCandidatesY = [-2, -1, 0, 1, 2].map(mm);
+    const shiftCandidatesY = [-6, -4, -2, 0, 2, 4, 6].map(mm);
     this.log('template:optionOffsets', {
       two: this.getOptionTemplateOffsets(2, totalBubbleSpacing),
       three: this.getOptionTemplateOffsets(3, totalBubbleSpacing),
@@ -1684,9 +2017,9 @@ class OCRService {
 
       const shiftXmm = bestShiftX / scale;
       const shiftYmm = bestShiftY / scale;
-      // Increased tolerance: allow up to 15mm X shift and 5mm Y shift for better alignment
+      // Increased tolerance: allow up to 15mm X shift and 8mm Y shift for better alignment
       const shiftXOk = Math.abs(shiftXmm) <= 15;
-      const shiftYOk = Math.abs(shiftYmm) <= 5;
+      const shiftYOk = Math.abs(shiftYmm) <= 8;
       this.log('template:rowShift', {
         row,
         shiftX: Number(bestShiftX.toFixed(2)),
@@ -1703,7 +2036,7 @@ class OCRService {
         const baseShiftY = shiftYOk ? bestShiftY : 0;
         // Expanded search range for per-question alignment
         const localShiftCandidatesX = [-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6].map(mm);
-        const localShiftCandidatesY = [-4, -3, -2, -1, 0, 1, 2, 3, 4].map(mm);
+        const localShiftCandidatesY = [-8, -6, -4, -2, 0, 2, 4, 6, 8].map(mm);
         let bestLocalShiftX = 0;
         let bestLocalShiftY = 0;
         let bestLocalScore = -1;
@@ -1751,8 +2084,15 @@ class OCRService {
         let detectionMethod = useDetected ? 'hough' : 'shiftedTemplate';
         
         if (!useDetected) {
+          // Use shifted box so Hough search looks where bubbles actually are
+          const shiftedSearchBox = {
+            x: question.box.x + finalShiftX,
+            y: question.box.y + finalShiftY,
+            width: question.box.width,
+            height: question.box.height
+          };
           const houghBasedCenters = this.findBubblesByFillInBox(
-            question.box,
+            shiftedSearchBox,
             question.bubbleCenters.length,
             bubbleRadius,
             totalBubbleSpacing
@@ -1785,16 +2125,26 @@ class OCRService {
           }))
         });
 
-        // Scan the question box horizontally to find actual bubble positions
-        const bubbleY = question.box.y + mm(8); // Expected Y position for bubbles
-        const scanStartX = question.box.x + padding;
-        const scanEndX = question.box.x + question.box.width - padding;
+        // Scan horizontally to find actual bubble positions.
+        // Tighten scan range around where bubbles actually are — the question box
+        // is always the same width (34mm) regardless of option count (2/3/4),
+        // but T/F questions only use ~8mm for 2 bubbles. Scanning the full box
+        // picks up noise peaks from box borders and question labels.
+        const scanBubbleY = bubbleCenters[0]?.y ?? (question.box.y + mm(8) + finalShiftY);
+        const minBubbleX = Math.min(...bubbleCenters.map(c => c.x));
+        const maxBubbleX = Math.max(...bubbleCenters.map(c => c.x));
+        const scanPadX = mm(5); // 5mm padding beyond outermost bubble
+        // Intersect with shifted box boundaries for safety
+        const shiftedBoxMinX = question.box.x + padding + finalShiftX;
+        const shiftedBoxMaxX = question.box.x + question.box.width - padding + finalShiftX;
+        const scanStartX = Math.max(shiftedBoxMinX, minBubbleX - scanPadX);
+        const scanEndX = Math.min(shiftedBoxMaxX, maxBubbleX + scanPadX);
         const scanStep = mm(0.5); // Fine-grained scan
         
-        // Find fill peaks across the question box
+        // Find fill peaks across the bubble area
         const fillScan: Array<{ x: number; fill: number }> = [];
         for (let scanX = scanStartX; scanX <= scanEndX; scanX += scanStep) {
-          const fill = this.calculateFillPercentageFromCircle(scanX, bubbleY, bubbleRadius);
+          const fill = this.calculateFillPercentageFromCircle(scanX, scanBubbleY, bubbleRadius);
           fillScan.push({ x: scanX, fill });
         }
         
@@ -1824,10 +2174,15 @@ class OCRService {
           }))
         });
         
-        // Match detected peaks with template centers
-        // Use peaks even if we only find 1 - they're more reliable than template positions
+        // Match detected peaks with template centers.
+        // ONLY use scan peaks to refine positions when we're using pure shiftedTemplate
+        // positions (no actual circle detection). When hough/houghFallback found real
+        // circle centers, those are much more accurate than scan peaks (which detect
+        // circle outline edges, not centers — e.g. Q6 hough found center at 20.45mm
+        // but scan peak was at 27mm, the edge of the circle outline).
         let finalBubbleCenters = bubbleCenters;
-        if (topPeaks.length >= 1) {
+        const usesScanPeaks = detectionMethod === 'shiftedTemplate';
+        if (usesScanPeaks && topPeaks.length >= 1) {
           // Match peaks with template positions, use peaks when available
           const matchedCenters: Array<{ x: number; y: number }> = [];
           const usedPeaks = new Set<number>();
@@ -1852,7 +2207,7 @@ class OCRService {
             }
             
             if (closestPeak) {
-              matchedCenters.push({ x: closestPeak.x, y: bubbleY });
+              matchedCenters.push({ x: closestPeak.x, y: scanBubbleY });
               usedPeaks.add(closestPeakIndex);
             } else {
               // Use template center if no peak found nearby
@@ -2035,34 +2390,312 @@ class OCRService {
     blurred.delete();
     circles.delete();
 
-    // Match detected circles to questions
+    // Per-row alignment shift: use detected circle positions for alignment.
+    // For each candidate shift, score how well shifted expected positions
+    // align with actual detected circles. Much more robust than ring darkness
+    // which can be fooled by adjacent question bubbles.
+    const totalRows = Math.max(0, ...templateGrid.map((q) => q.row)) + 1;
+    const shiftCandidatesX = [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10].map(mm);
+    const shiftCandidatesY = [-6, -4, -2, 0, 2, 4, 6].map(mm);
+    const circleMatchThreshold = mm(6); // 6mm max distance for circle matching
+    const rowShifts: Array<{ shiftX: number; shiftY: number }> = [];
+    for (let row = 0; row < totalRows; row++) {
+      const rowQuestions = templateGrid.filter((q) => q.row === row);
+      let bestShiftX = 0;
+      let bestShiftY = 0;
+      let bestScore = 0; // Start at 0: prefer (0,0) when no circles match any candidate
+      for (const shiftX of shiftCandidatesX) {
+        for (const shiftY of shiftCandidatesY) {
+          let score = 0;
+          for (const q of rowQuestions) {
+            for (const bubble of q.bubbleCenters) {
+              const expX = bubble.x + shiftX;
+              const expY = bubble.y + shiftY;
+              // Find closest detected circle
+              let minDist = Infinity;
+              for (const circle of detectedCircles) {
+                const d = Math.hypot(circle.x - expX, circle.y - expY);
+                if (d < minDist) minDist = d;
+              }
+              // Score: 1 for exact match, 0 at threshold
+              if (minDist < circleMatchThreshold) {
+                score += 1 - minDist / circleMatchThreshold;
+              }
+            }
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestShiftX = shiftX;
+            bestShiftY = shiftY;
+          }
+        }
+      }
+      const shiftXOk = Math.abs(bestShiftX / scale) <= 15;
+      const shiftYOk = Math.abs(bestShiftY / scale) <= 8;
+      rowShifts[row] = {
+        shiftX: shiftXOk ? bestShiftX : 0,
+        shiftY: shiftYOk ? bestShiftY : 0
+      };
+    }
+    this.log('detection:rowShifts', {
+      rowShifts: rowShifts.map((s, r) => ({ row: r, shiftXmm: Number((s.shiftX / scale).toFixed(2)), shiftYmm: Number((s.shiftY / scale).toFixed(2)) }))
+    });
+
+    type Circle = { x: number; y: number; radius: number };
+    type Point = { x: number; y: number };
+    // Max distance (in pixels) a circle can be from expected position to be assigned.
+    // Beyond this it's likely from a different question.
+    // 12mm is generous enough for Y drift (~5-6mm) while still well below
+    // question spacing (34mm horizontal, 20mm vertical).
+    const maxAssignDist = mm(12);
+    const maxAssignDistSq = maxAssignDist * maxAssignDist;
+
+    // Generate combinations of 'choose' items from [0..total-1]
+    const getCombinations = (total: number, choose: number): number[][] => {
+      const result: number[][] = [];
+      const combo: number[] = [];
+      const backtrack = (start: number) => {
+        if (combo.length === choose) { result.push([...combo]); return; }
+        for (let i = start; i < total; i++) {
+          combo.push(i);
+          backtrack(i + 1);
+          combo.pop();
+        }
+      };
+      backtrack(0);
+      return result;
+    };
+
+    /**
+     * Assign circles to option positions using left-to-right physical ordering.
+     * Bubbles on the exam are ALWAYS ordered left-to-right (A, B, C, D),
+     * so sorting circles by X and matching by position order is more robust
+     * than greedy nearest-neighbor (which can shift by one full position when
+     * the expected centers have even a small systematic offset).
+     */
+    const assignCirclesToPositions = (
+      circles: Circle[],
+      expected: Point[],
+      n: number
+    ): (Circle | null)[] => {
+      if (circles.length === 0) return new Array(n).fill(null);
+
+      // Sort circles by X position — matches physical left-to-right option order
+      const sorted = [...circles].sort((a, b) => a.x - b.x);
+
+      // Exact match: leftmost = first option (A), second = B, etc.
+      if (sorted.length === n) {
+        // Sanity check: each circle should be within maxAssignDist of its expected position
+        const result: (Circle | null)[] = [];
+        for (let i = 0; i < n; i++) {
+          const dx = sorted[i].x - expected[i].x;
+          const dy = sorted[i].y - expected[i].y;
+          result.push((dx * dx + dy * dy) <= maxAssignDistSq ? sorted[i] : null);
+        }
+        return result;
+      }
+
+      const result: (Circle | null)[] = new Array(n).fill(null);
+
+      if (sorted.length < n) {
+        // Fewer circles than options: find which position slots they occupy.
+        // Try all C(n, M) possible slot assignments, pick minimum total distance.
+        // (e.g. 3 circles for 4 options → 4 combinations to try)
+        const M = sorted.length;
+        let bestCombo: number[] | null = null;
+        let bestCost = Infinity;
+        for (const combo of getCombinations(n, M)) {
+          let cost = 0;
+          let valid = true;
+          for (let k = 0; k < M; k++) {
+            const dx = sorted[k].x - expected[combo[k]].x;
+            const dy = sorted[k].y - expected[combo[k]].y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 > maxAssignDistSq) { valid = false; break; }
+            cost += d2;
+          }
+          if (valid && cost < bestCost) {
+            bestCost = cost;
+            bestCombo = combo;
+          }
+        }
+        if (bestCombo) {
+          for (let k = 0; k < M; k++) {
+            result[bestCombo[k]] = sorted[k];
+          }
+        }
+      } else {
+        // More circles than options: pick the best N circles from M.
+        // Try all C(M, N) subsets (sorted by X), pick minimum total distance.
+        let bestCombo: number[] | null = null;
+        let bestCost = Infinity;
+        for (const combo of getCombinations(sorted.length, n)) {
+          let cost = 0;
+          let valid = true;
+          for (let k = 0; k < n; k++) {
+            const dx = sorted[combo[k]].x - expected[k].x;
+            const dy = sorted[combo[k]].y - expected[k].y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 > maxAssignDistSq) { valid = false; break; }
+            cost += d2;
+          }
+          if (valid && cost < bestCost) {
+            bestCost = cost;
+            bestCombo = combo;
+          }
+        }
+        if (bestCombo) {
+          for (let k = 0; k < n; k++) {
+            result[k] = sorted[bestCombo[k]];
+          }
+        }
+      }
+
+      return result;
+    };
+
+    // Track which circles have been claimed so each is used by at most one question
+    const usedCircleIndices = new Set<number>();
+
+    // Match detected circles to questions using shifted boxes
     for (const question of templateGrid) {
       const options = question.type === 'mc'
         ? Math.min(4, Math.max(2, Number(question.options) || 4))
         : 2;
 
-      // Find circles within this question's box
-      const questionCircles = detectedCircles.filter(circle => {
-        return circle.x >= question.box.x &&
-               circle.x <= question.box.x + question.box.width &&
-               circle.y >= question.box.y &&
-               circle.y <= question.box.y + question.box.height;
-      });
+      const row = question.row;
+      const baseShiftX = rowShifts[row]?.shiftX ?? 0;
+      const baseShiftY = rowShifts[row]?.shiftY ?? 0;
 
-      // Sort by X position (left to right)
-      questionCircles.sort((a, b) => a.x - b.x);
+      // Local shift search: use circle proximity instead of ring darkness.
+      // Score each candidate shift by how well shifted expected positions
+      // align with actual detected circles (prevents off-by-one-bubble shifts).
+      const localShiftCandidatesX = [-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6].map(mm);
+      const localShiftCandidatesY = [-8, -6, -4, -2, 0, 2, 4, 6, 8].map(mm);
+      let bestLocalShiftX = 0;
+      let bestLocalShiftY = 0;
+      let bestLocalScore = 0; // Start at 0: prefer (0,0) when no circles match any candidate
+      for (const lx of localShiftCandidatesX) {
+        for (const ly of localShiftCandidatesY) {
+          let score = 0;
+          for (const bubble of question.bubbleCenters) {
+            const expX = bubble.x + baseShiftX + lx;
+            const expY = bubble.y + baseShiftY + ly;
+            // Find closest detected circle to this expected position
+            let minDist = Infinity;
+            for (const circle of detectedCircles) {
+              const d = Math.hypot(circle.x - expX, circle.y - expY);
+              if (d < minDist) minDist = d;
+            }
+            if (minDist < circleMatchThreshold) {
+              score += 1 - minDist / circleMatchThreshold;
+            }
+          }
+          if (score > bestLocalScore) {
+            bestLocalScore = score;
+            bestLocalShiftX = lx;
+            bestLocalShiftY = ly;
+          }
+        }
+      }
 
-      // If we found circles, match them to expected positions
+      const shiftX = baseShiftX + bestLocalShiftX;
+      const shiftY = baseShiftY + bestLocalShiftY;
+
+      // Compute expected bubble centers FIRST so we can tighten the search box
+      const expectedCenters = question.bubbleCenters.map((b) => ({
+        x: b.x + shiftX,
+        y: b.y + shiftY
+      }));
+
+      // Tighten the search box horizontally around actual bubble positions.
+      // The question box is always the same width (34mm) regardless of option count,
+      // but T/F questions only use ~8mm for 2 bubbles. Using the full 30mm box
+      // picks up noise circles from box edges, row borders, etc.
+      // Use intersection of original box and bubble-centered search area.
+      const box = question.box;
+      const padY = mm(2);
+      const bubbleSearchPadX = mm(5); // 5mm padding beyond outermost bubble
+      const origMinX = box.x + shiftX;
+      const origMaxX = origMinX + box.width;
+      const minExpX = Math.min(...expectedCenters.map(c => c.x));
+      const maxExpX = Math.max(...expectedCenters.map(c => c.x));
+      const bubbleMinX = minExpX - bubbleSearchPadX;
+      const bubbleMaxX = maxExpX + bubbleSearchPadX;
+      // Intersection: tightest of original box and bubble-centered box
+      const tightMinX = Math.max(origMinX, bubbleMinX);
+      const tightMaxX = Math.min(origMaxX, bubbleMaxX);
+      const shiftedBox = {
+        x: tightMinX,
+        y: box.y + shiftY - padY,
+        width: Math.max(0, tightMaxX - tightMinX),
+        height: box.height + 2 * padY
+      };
+
+      // Find UNCLAIMED circles within this question's tight shifted box
+      const questionCircles: Circle[] = [];
+      const questionCircleIndices: number[] = [];
+      for (let ci = 0; ci < detectedCircles.length; ci++) {
+        if (usedCircleIndices.has(ci)) continue; // already claimed by another question
+        const circle = detectedCircles[ci];
+        if (circle.x >= shiftedBox.x &&
+            circle.x <= shiftedBox.x + shiftedBox.width &&
+            circle.y >= shiftedBox.y &&
+            circle.y <= shiftedBox.y + shiftedBox.height) {
+          questionCircles.push(circle);
+          questionCircleIndices.push(ci);
+        }
+      }
+
       const fillByOption: number[] = [];
       let maxFill = 0;
       let secondFill = 0;
       let selectedIndex: number | null = null;
 
-      if (questionCircles.length >= options) {
-        // Use detected circles
+      // Always use position-based assignment (even with fewer circles than options)
+      let assigned: (Circle | null)[] = [];
+      if (questionCircles.length > 0) {
+        assigned = assignCirclesToPositions(questionCircles, expectedCenters, options);
+
+        // Claim assigned circles using tracked indices (reliable, not indexOf)
+        for (const ac of assigned) {
+          if (ac) {
+            const localIdx = questionCircles.indexOf(ac);
+            if (localIdx >= 0 && localIdx < questionCircleIndices.length) {
+              usedCircleIndices.add(questionCircleIndices[localIdx]);
+            }
+          }
+        }
+
+        if (questionCircles.length >= options) {
+          this.log('detection:circles:raw', {
+            question: question.questionNumber,
+            detectedCircles: questionCircles.map((c) => ({
+              xmm: Number((c.x / scale).toFixed(2)),
+              ymm: Number((c.y / scale).toFixed(2)),
+              radius: Number(c.radius.toFixed(2))
+            })),
+            expectedCenters: expectedCenters.map((c) => ({
+              xmm: Number((c.x / scale).toFixed(2)),
+              ymm: Number((c.y / scale).toFixed(2))
+            })),
+            assigned: assigned.map((c, i) =>
+              c
+                ? {
+                    option: String.fromCharCode(65 + i),
+                    xmm: Number((c.x / scale).toFixed(2)),
+                    ymm: Number((c.y / scale).toFixed(2))
+                  }
+                : null
+            )
+          });
+        }
+
         for (let i = 0; i < options; i++) {
-          const circle = questionCircles[i];
-          const fill = this.calculateFillPercentageFromCircle(circle.x, circle.y, circle.radius);
+          const circle = assigned[i];
+          const fill = circle
+            ? this.calculateFillPercentageFromCircle(circle.x, circle.y, circle.radius)
+            : this.calculateFillPercentageFromCircle(expectedCenters[i].x, expectedCenters[i].y, bubbleRadius);
           fillByOption.push(fill);
           if (fill > maxFill) {
             secondFill = maxFill;
@@ -2073,10 +2706,13 @@ class OCRService {
           }
         }
       } else {
-        // Fallback: use template positions if not enough circles found
         for (let i = 0; i < question.bubbleCenters.length; i++) {
           const bubble = question.bubbleCenters[i];
-          const fill = this.calculateFillPercentageFromCircle(bubble.x, bubble.y, bubbleRadius);
+          const fill = this.calculateFillPercentageFromCircle(
+            bubble.x + shiftX,
+            bubble.y + shiftY,
+            bubbleRadius
+          );
           fillByOption.push(fill);
           if (fill > maxFill) {
             secondFill = maxFill;
@@ -2170,21 +2806,25 @@ class OCRService {
     }
 
     // Student ID Section - match PDF generation exactly
+    // PDF draws: "Student ID:" text (+6mm), instruction text (+8mm), squares, example label (+5mm), example digits (+12mm)
     if (layoutConfig?.studentIdEnabled !== false) {
-      yPosition += mm(8); // "Student ID:" label line
+      yPosition += mm(6); // "Student ID:" label text line
+      yPosition += mm(8); // "Darken the bars..." instruction text line
 
       const digits = layoutConfig?.studentIdDigits || 6;
-      const squareHeight = mm(7);
-      const squareSpacing = mm(1);
-      const squaresPerRow = 10;
+      const squareHeight = mm(ID_CELL_HEIGHT_MM);     // 10mm (shared constant)
+      const squareSpacing = mm(ID_CELL_SPACING_MM);   // 1.5mm (shared constant)
+      const squaresPerRow = ID_CELLS_PER_ROW;         // 10 (shared constant)
       const rowsNeeded = Math.ceil(digits / squaresPerRow);
 
       // Student ID squares: rowsNeeded * (squareHeight + squareSpacing + 6) + 4
       yPosition += rowsNeeded * (squareHeight + squareSpacing + mm(6)) + mm(4);
 
-      // Example digits section - match PDF generation (digitHeight + 6)
+      // Example digits section - match PDF generation:
+      // "Example digits..." text label (+5mm), then digit examples (digitHeight + 6mm)
+      yPosition += mm(5); // "Example digits (darken bars like these):" label
       const digitHeight = mm(6);
-      yPosition += digitHeight + mm(6); // Examples + spacing
+      yPosition += digitHeight + mm(6); // Digit height + spacing after examples
     }
 
     // Instructions line (+6mm)
@@ -2432,6 +3072,7 @@ class OCRService {
     return { centers: bestWindow, meanDistance: bestMeanDistance };
   }
 
+  /** Must match pdfLayout.getOptionOffsets / BUBBLE_SPACING_MM (8mm) so expected centers align with PDF bubbles. */
   private getOptionTemplateOffsets(options: number, spacing: number): number[] {
     const count = Math.min(4, Math.max(2, Math.round(options)));
     switch (count) {
@@ -2825,9 +3466,38 @@ class OCRService {
 
   private warpToTemplate(sourceMat: any, corners: { tl: { x: number; y: number }; tr: { x: number; y: number }; br: { x: number; y: number }; bl: { x: number; y: number } }) {
     const cv = this.cv;
-    
-    // Calculate actual aspect ratio from detected corners
-    // A4 aspect ratio: 210/297 = 0.707 (portrait) or 297/210 = 1.414 (landscape)
+
+    // A4 page dimensions and target resolution
+    const pageWidthMm = PAGE_WIDTH_MM;   // 210
+    const pageHeightMm = PAGE_HEIGHT_MM; // 297
+    const pxPerMm = 10; // target: 2100px / 210mm = 10 px/mm
+    const targetWidth = pageWidthMm * pxPerMm;   // 2100
+    const targetHeight = pageHeightMm * pxPerMm;  // 2970
+
+    // CRITICAL: Corner markers are drawn at known positions on the A4 page:
+    //   markerMargin = 5mm, markerSize = 12mm
+    // detectCornerMarkers/detectFiducialMarkers returns the OUTER page-corner
+    // of each marker's bounding rect:
+    //   TL detected = outer top-left of TL marker = page (5, 5)mm
+    //   TR detected = outer top-right of TR marker = page (205, 5)mm
+    //   BR detected = outer bottom-right of BR marker = page (205, 292)mm
+    //   BL detected = outer bottom-left of BL marker = page (5, 292)mm
+    //
+    // We MUST map these to their true page positions in the warped image so that
+    // the coordinate system (scale = cols/210 = 10px/mm) is accurate everywhere.
+    // Previously, mapping to [0,0]->[2100,0] treated marker corners as page edges,
+    // creating a ~5% scale error that shifted all bubble positions by 4-6mm.
+    const markerMarginMm = MARKER_MARGIN_MM; // 5
+    const tlDstX = markerMarginMm * pxPerMm;                        // 50
+    const tlDstY = markerMarginMm * pxPerMm;                        // 50
+    const trDstX = (pageWidthMm - markerMarginMm) * pxPerMm;       // 2050
+    const trDstY = markerMarginMm * pxPerMm;                        // 50
+    const brDstX = (pageWidthMm - markerMarginMm) * pxPerMm;       // 2050
+    const brDstY = (pageHeightMm - markerMarginMm) * pxPerMm;      // 2920
+    const blDstX = markerMarginMm * pxPerMm;                        // 50
+    const blDstY = (pageHeightMm - markerMarginMm) * pxPerMm;      // 2920
+
+    // Log aspect ratio for diagnostics
     const topWidth = Math.sqrt(
       Math.pow(corners.tr.x - corners.tl.x, 2) + 
       Math.pow(corners.tr.y - corners.tl.y, 2)
@@ -2844,23 +3514,17 @@ class OCRService {
       Math.pow(corners.br.x - corners.tr.x, 2) + 
       Math.pow(corners.br.y - corners.tr.y, 2)
     );
-    
     const avgWidth = (topWidth + bottomWidth) / 2;
     const avgHeight = (leftHeight + rightHeight) / 2;
     const detectedAspectRatio = avgWidth / avgHeight;
-    
-    // Use detected aspect ratio to calculate target dimensions (preserve original ratio)
-    // Scale to reasonable resolution (2100px width) but maintain detected aspect ratio
-    const baseWidth = 2100;
-    const targetWidth = baseWidth;
-    const targetHeight = Math.round(baseWidth / detectedAspectRatio);
-    
+
     this.log('homography:aspectRatio', {
       detectedAspectRatio: Number(detectedAspectRatio.toFixed(3)),
       avgWidth: Number(avgWidth.toFixed(1)),
       avgHeight: Number(avgHeight.toFixed(1)),
       targetWidth,
       targetHeight,
+      markerMarginMm,
       targetAspectRatio: Number((targetWidth / targetHeight).toFixed(3))
     });
 
@@ -2871,10 +3535,10 @@ class OCRService {
       corners.bl.x, corners.bl.y
     ]);
     const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-      0, 0,
-      targetWidth, 0,
-      targetWidth, targetHeight,
-      0, targetHeight
+      tlDstX, tlDstY,
+      trDstX, trDstY,
+      brDstX, brDstY,
+      blDstX, blDstY
     ]);
 
     // Use findHomography with RANSAC for robust outlier rejection

@@ -33,7 +33,7 @@ interface ScanResult {
   recognizedNumbers?: Array<{ digit: number | null; confidence: number }>;
   processingTime: number;
   imageQuality: number;
-  // Dual detection results
+  // Dual detection results (bubbles)
   templateMethod?: {
     answers: Record<number, string>;
     score: number;
@@ -44,6 +44,10 @@ interface ScanResult {
     score: number;
     confidence: number;
   };
+  // Dual student ID methods
+  recognizedNumbersBySegments?: Array<{ digit: number | null; confidence: number }>;
+  recognizedNumbersByTemplate?: Array<{ digit: number | null; confidence: number }>;
+  studentIdDebugSegmentBoxes?: Array<{ squareIndex: number; segments: Record<string, { x: number; y: number; w: number; h: number }> }>;
 }
 
 function AnswerSheetScanner() {
@@ -74,6 +78,7 @@ function AnswerSheetScanner() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraContainerRef = useRef<HTMLDivElement>(null);
 
   // Check camera permission status & viewport on mount
   useEffect(() => {
@@ -340,6 +345,17 @@ function AnswerSheetScanner() {
       // Success - permission granted
       setHasCameraPermission(true);
       setStream(mediaStream);
+
+      // On mobile, request fullscreen for the camera container once it's in the DOM
+      if (isMobileViewport) {
+        const tryFullscreen = () => {
+          const el = cameraContainerRef.current;
+          if (el && el.requestFullscreen) {
+            el.requestFullscreen().catch(() => {});
+          }
+        };
+        requestAnimationFrame(() => setTimeout(tryFullscreen, 100));
+      }
     } catch (error: any) {
       console.error('[Camera] getUserMedia error:', error);
       
@@ -390,6 +406,9 @@ function AnswerSheetScanner() {
   };
 
   const stopCamera = () => {
+    if (document.fullscreenElement && cameraContainerRef.current?.contains(document.fullscreenElement)) {
+      document.exitFullscreen().catch(() => {});
+    }
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
       setStream(null);
@@ -485,13 +504,19 @@ function AnswerSheetScanner() {
         imageQuality: ocrResult.imageQuality,
       });
 
+      // Normalize answer for comparison (case-insensitive)
+      const normalizeAnswer = (ans: unknown): string =>
+        typeof ans === 'string' ? ans.trim().toUpperCase() : '';
+
       // Calculate score based on answer key (primary method)
       const studentAnswers: Record<number, string> = {};
       let correctAnswers = 0;
 
       ocrResult.detectedBubbles.forEach(bubble => {
         studentAnswers[bubble.questionNumber] = bubble.answer || '';
-        if (bubble.answer === selectedExam.answer_key[bubble.questionNumber]) {
+        const detected = normalizeAnswer(bubble.answer);
+        const correct = normalizeAnswer(selectedExam.answer_key[bubble.questionNumber]);
+        if (detected && detected === correct) {
           correctAnswers++;
         }
       });
@@ -503,7 +528,9 @@ function AnswerSheetScanner() {
         let templateCorrect = 0;
         ocrResult.templateMethod.bubbles.forEach(bubble => {
           templateAnswers[bubble.questionNumber] = bubble.answer || '';
-          if (bubble.answer === selectedExam.answer_key[bubble.questionNumber]) {
+          const detected = normalizeAnswer(bubble.answer);
+          const correct = normalizeAnswer(selectedExam.answer_key[bubble.questionNumber]);
+          if (detected && detected === correct) {
             templateCorrect++;
           }
         });
@@ -521,7 +548,9 @@ function AnswerSheetScanner() {
         let detectionCorrect = 0;
         ocrResult.detectionMethod.bubbles.forEach(bubble => {
           detectionAnswers[bubble.questionNumber] = bubble.answer || '';
-          if (bubble.answer === selectedExam.answer_key[bubble.questionNumber]) {
+          const detected = normalizeAnswer(bubble.answer);
+          const correct = normalizeAnswer(selectedExam.answer_key[bubble.questionNumber]);
+          if (detected && detected === correct) {
             detectionCorrect++;
           }
         });
@@ -571,7 +600,10 @@ function AnswerSheetScanner() {
         studentId,
         recognizedNumbers,
         templateMethod,
-        detectionMethod
+        detectionMethod,
+        recognizedNumbersBySegments: ocrResult.recognizedNumbersBySegments?.map((n) => ({ digit: n.digit, confidence: n.confidence })),
+        recognizedNumbersByTemplate: ocrResult.recognizedNumbersByTemplate?.map((n) => ({ digit: n.digit, confidence: n.confidence })),
+        studentIdDebugSegmentBoxes: ocrResult.studentIdDebugSegmentBoxes
       };
 
       console.log('[OCR] Final scan result (live camera)', result);
@@ -685,22 +717,23 @@ function AnswerSheetScanner() {
       }
     };
 
-    const intervalId = window.setInterval(checkFrame, 2000); // every 2 seconds
+    // On mobile use shorter interval for snappier auto-detect
+    const intervalMs = isMobileViewport ? 1500 : 2000;
+    const intervalId = window.setInterval(checkFrame, intervalMs);
 
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [stream, selectedExam, cameraReady, isScanning, recognitionStatus]);
+  }, [stream, selectedExam, cameraReady, isScanning, recognitionStatus, isMobileViewport]);
 
-  // Auto-capture once we are confident the answer sheet is recognized
+  // Auto-capture (and evaluate) on mobile once answer sheet is confidently detected
   useEffect(() => {
-    if (recognitionStatus === 'ready' && !isScanning) {
-      console.log('[OCR][AutoCapture] recognitionStatus=ready, triggering captureImage()');
-      // Fire and forget; captureImage will update recognitionStatus to 'captured'
+    if (isMobileViewport && recognitionStatus === 'ready' && !isScanning) {
+      console.log('[OCR][AutoCapture] mobile: recognitionStatus=ready, auto-capturing and grading');
       void captureImage();
     }
-  }, [recognitionStatus, isScanning]);
+  }, [isMobileViewport, recognitionStatus, isScanning]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -760,15 +793,16 @@ function AnswerSheetScanner() {
         imageQuality: ocrResult.imageQuality,
       });
 
-      // Calculate score (primary method)
-      const studentAnswers: Record<number, string> = {};
-      let correctAnswers = 0;
+      // Normalize answer for comparison (case-insensitive)
+      const normalizeAnswer = (ans: unknown): string =>
+        typeof ans === 'string' ? ans.trim().toUpperCase() : '';
 
-      ocrResult.detectedBubbles.forEach(bubble => {
-        studentAnswers[bubble.questionNumber] = bubble.answer || '';
-        if (bubble.answer === selectedExam.answer_key[bubble.questionNumber]) {
-          correctAnswers++;
-        }
+      // Debug: log the raw answer key
+      console.log('[OCR] Answer key debug (upload)', {
+        answerKey: selectedExam.answer_key,
+        answerKeyType: typeof selectedExam.answer_key,
+        keys: Object.keys(selectedExam.answer_key),
+        values: Object.values(selectedExam.answer_key)
       });
 
       // Process template method results
@@ -778,7 +812,9 @@ function AnswerSheetScanner() {
         let templateCorrect = 0;
         ocrResult.templateMethod.bubbles.forEach(bubble => {
           templateAnswers[bubble.questionNumber] = bubble.answer || '';
-          if (bubble.answer === selectedExam.answer_key[bubble.questionNumber]) {
+          const detected = normalizeAnswer(bubble.answer);
+          const correct = normalizeAnswer(selectedExam.answer_key[bubble.questionNumber]);
+          if (detected && detected === correct) {
             templateCorrect++;
           }
         });
@@ -796,7 +832,16 @@ function AnswerSheetScanner() {
         let detectionCorrect = 0;
         ocrResult.detectionMethod.bubbles.forEach(bubble => {
           detectionAnswers[bubble.questionNumber] = bubble.answer || '';
-          if (bubble.answer === selectedExam.answer_key[bubble.questionNumber]) {
+          const detected = normalizeAnswer(bubble.answer);
+          const correct = normalizeAnswer(selectedExam.answer_key[bubble.questionNumber]);
+          console.log('[OCR] Detection compare', {
+            q: bubble.questionNumber,
+            detected,
+            correct,
+            rawKey: selectedExam.answer_key[bubble.questionNumber],
+            match: detected === correct
+          });
+          if (detected && detected === correct) {
             detectionCorrect++;
           }
         });
@@ -805,6 +850,30 @@ function AnswerSheetScanner() {
           score: detectionCorrect,
           confidence: ocrResult.detectionMethod.confidence
         };
+      }
+
+      // Primary = method with higher score (so UI shows best result)
+      const detectionScore = detectionMethod?.score ?? 0;
+      const templateScore = templateMethod?.score ?? 0;
+      let studentAnswers: Record<number, string>;
+      let correctAnswers: number;
+      if (detectionMethod && detectionScore >= templateScore) {
+        studentAnswers = detectionMethod.answers;
+        correctAnswers = detectionScore;
+      } else if (templateMethod) {
+        studentAnswers = templateMethod.answers;
+        correctAnswers = templateScore;
+      } else {
+        studentAnswers = {};
+        correctAnswers = 0;
+        ocrResult.detectedBubbles.forEach(bubble => {
+          studentAnswers[bubble.questionNumber] = bubble.answer || '';
+          const detected = normalizeAnswer(bubble.answer);
+          const correct = normalizeAnswer(selectedExam.answer_key[bubble.questionNumber]);
+          if (detected && detected === correct) {
+            correctAnswers++;
+          }
+        });
       }
 
       const answeredCount = Object.keys(studentAnswers).length;
@@ -844,7 +913,10 @@ function AnswerSheetScanner() {
         studentId,
         recognizedNumbers,
         templateMethod,
-        detectionMethod
+        detectionMethod,
+        recognizedNumbersBySegments: ocrResult.recognizedNumbersBySegments?.map((n) => ({ digit: n.digit, confidence: n.confidence })),
+        recognizedNumbersByTemplate: ocrResult.recognizedNumbersByTemplate?.map((n) => ({ digit: n.digit, confidence: n.confidence })),
+        studentIdDebugSegmentBoxes: ocrResult.studentIdDebugSegmentBoxes
       };
 
       console.log('[OCR] Final scan result (uploaded image)', result);
@@ -993,22 +1065,43 @@ function AnswerSheetScanner() {
             className="hidden"
           />
 
-          {/* Camera View */}
+          {/* Camera View: full-screen on mobile, inline on desktop */}
           {stream && (
             <motion.div
+              ref={cameraContainerRef}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="mb-6"
+              className={
+                isMobileViewport
+                  ? 'fixed inset-0 z-50 flex flex-col bg-black'
+                  : 'mb-6'
+              }
             >
-              <div className="relative bg-gray-900 rounded-lg overflow-hidden">
-                {/* 9:16 on phones, 16:9 on desktop */}
-                <div className="relative w-full aspect-[9/16] md:aspect-[16/9]">
+              <div
+                className={
+                  isMobileViewport
+                    ? 'relative flex-1 flex flex-col min-h-0'
+                    : 'relative bg-gray-900 rounded-lg overflow-hidden'
+                }
+              >
+                {/* 9:16 on phones (full area on mobile), 16:9 on desktop */}
+                <div
+                  className={
+                    isMobileViewport
+                      ? 'relative flex-1 w-full min-h-0'
+                      : 'relative w-full aspect-[9/16] md:aspect-[16/9]'
+                  }
+                >
                   <video
                     ref={videoRef}
                     autoPlay
                     playsInline
                     muted
-                    className="h-full w-full object-contain md:object-cover"
+                    className={
+                      isMobileViewport
+                        ? 'h-full w-full object-cover'
+                        : 'h-full w-full object-contain md:object-cover'
+                    }
                   />
                   <canvas ref={canvasRef} className="hidden" />
 
@@ -1040,39 +1133,82 @@ function AnswerSheetScanner() {
                   </div>
                 </div>
 
-                <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex space-x-4">
-                  <Button
-                    onClick={captureImage}
-                    disabled={isScanning || !cameraReady}
-                    className="bg-blue-600 hover:bg-blue-700"
-                  >
-                    {isScanning ? (
-                      <>
-                        <RefreshCw size={20} className="mr-2 animate-spin" />
-                        Processing...
-                      </>
-                    ) : (
-                      <>
-                        <Camera size={20} className="mr-2" />
-                        Capture & Grade
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    onClick={stopCamera}
-                    variant="outline"
-                    className="bg-white hover:bg-gray-100"
-                  >
-                    Stop Camera
-                  </Button>
+                <div
+                  className={
+                    isMobileViewport
+                      ? 'absolute bottom-4 left-0 right-0 p-4 flex flex-col gap-3 bg-gradient-to-t from-black/80 to-transparent'
+                      : 'absolute bottom-4 left-1/2 transform -translate-x-1/2 flex space-x-4'
+                  }
+                >
+                  {!isMobileViewport && (
+                    <>
+                      <Button
+                        onClick={captureImage}
+                        disabled={isScanning || !cameraReady}
+                        className="bg-blue-600 hover:bg-blue-700"
+                      >
+                        {isScanning ? (
+                          <>
+                            <RefreshCw size={20} className="mr-2 animate-spin" />
+                            Processing...
+                          </>
+                        ) : (
+                          <>
+                            <Camera size={20} className="mr-2" />
+                            Capture & Grade
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        onClick={stopCamera}
+                        variant="outline"
+                        className="bg-white hover:bg-gray-100"
+                      >
+                        Stop Camera
+                      </Button>
+                    </>
+                  )}
+                  {isMobileViewport && (
+                    <>
+                      <div className="flex items-center justify-center gap-2 text-xs sm:text-sm text-white">
+                        {recognitionStatus === 'idle' && (
+                          <span>Position the answer sheet in view.</span>
+                        )}
+                        {recognitionStatus === 'searching' && (
+                          <span className="flex items-center">
+                            <span className="mr-2 inline-flex h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+                            Looking for answer sheet…
+                          </span>
+                        )}
+                        {recognitionStatus === 'ready' && (
+                          <span className="flex items-center text-emerald-300">
+                            <span className="mr-2 inline-flex h-2 w-2 animate-ping rounded-full bg-emerald-500" />
+                            Sheet detected — grading…
+                          </span>
+                        )}
+                        {recognitionStatus === 'captured' && (
+                          <span className="text-gray-300">Processing…</span>
+                        )}
+                      </div>
+                      <Button
+                        onClick={stopCamera}
+                        variant="outline"
+                        className="bg-white/90 hover:bg-white text-gray-900 border-0"
+                      >
+                        Stop Camera
+                      </Button>
+                    </>
+                  )}
                 </div>
               </div>
 
-              {/* Recognition status indicator */}
-              <div className="mt-3 flex items-center justify-center gap-2 text-xs sm:text-sm">
-                {recognitionStatus === 'idle' && (
-                  <span className="text-gray-500">Camera ready. Position the answer sheet in view.</span>
-                )}
+              {/* Recognition status + tips: desktop only (on mobile status is in overlay) */}
+              {!isMobileViewport && (
+                <>
+                  <div className="mt-3 flex items-center justify-center gap-2 text-xs sm:text-sm">
+                    {recognitionStatus === 'idle' && (
+                      <span className="text-gray-500">Camera ready. Position the answer sheet in view.</span>
+                    )}
                 {recognitionStatus === 'searching' && (
                   <span className="flex items-center text-amber-600">
                     <span className="mr-2 inline-flex h-2 w-2 animate-pulse rounded-full bg-amber-500" />
@@ -1090,16 +1226,18 @@ function AnswerSheetScanner() {
                 )}
               </div>
 
-              <div className="mt-4 p-4 bg-blue-50 rounded-lg">
-                <h4 className="font-semibold text-blue-800 mb-2">Scanning Tips:</h4>
-                <ul className="text-sm text-blue-700 space-y-1">
-                  <li>• Ensure good lighting and avoid shadows</li>
-                  <li>• Keep the answer sheet flat and centered</li>
-                  <li>• Place the answer sheet vertically (portrait)</li>
-                  <li>• Make sure bubbles are clearly filled</li>
-                  <li>• Avoid camera shake when capturing</li>
-                </ul>
-              </div>
+                  <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+                    <h4 className="font-semibold text-blue-800 mb-2">Scanning Tips:</h4>
+                    <ul className="text-sm text-blue-700 space-y-1">
+                      <li>• Ensure good lighting and avoid shadows</li>
+                      <li>• Keep the answer sheet flat and centered</li>
+                      <li>• Place the answer sheet vertically (portrait)</li>
+                      <li>• Make sure bubbles are clearly filled</li>
+                      <li>• Avoid camera shake when capturing</li>
+                    </ul>
+                  </div>
+                </>
+              )}
             </motion.div>
           )}
 
@@ -1216,7 +1354,7 @@ function AnswerSheetScanner() {
               </div>
             )}
 
-            {/* Student ID */}
+            {/* Student ID - primary + both methods */}
             {selectedExam?.student_info?.student_id && (
               <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
                 <h3 className="text-lg font-semibold text-yellow-800 mb-2">Student ID</h3>
@@ -1229,9 +1367,30 @@ function AnswerSheetScanner() {
                     Not detected. Try a clearer photo or fill the digits darker.
                   </div>
                 )}
+                {(scanResult.recognizedNumbersBySegments != null || scanResult.recognizedNumbersByTemplate != null) && (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-sm font-medium text-yellow-800">Method comparison</p>
+                    {scanResult.recognizedNumbersBySegments != null && (
+                      <div className="text-sm">
+                        <span className="text-yellow-700 font-medium">Segments:</span>{' '}
+                        <span className="font-mono">
+                          {scanResult.recognizedNumbersBySegments.map((n, i) => (n.digit !== null ? n.digit : '—')).join(' ')}
+                        </span>
+                      </div>
+                    )}
+                    {scanResult.recognizedNumbersByTemplate != null && (
+                      <div className="text-sm">
+                        <span className="text-yellow-700 font-medium">Templates:</span>{' '}
+                        <span className="font-mono">
+                          {scanResult.recognizedNumbersByTemplate.map((n, i) => (n.digit !== null ? n.digit : '—')).join(' ')}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {scanResult.recognizedNumbers && (
                   <div className="mt-3">
-                    <p className="text-sm text-yellow-700 mb-1">Digit Recognition Details:</p>
+                    <p className="text-sm text-yellow-700 mb-1">Digit Recognition Details (primary):</p>
                     <div className="flex space-x-2">
                       {scanResult.recognizedNumbers.map((num, index) => (
                         <div key={index} className="text-center">
@@ -1249,6 +1408,15 @@ function AnswerSheetScanner() {
                       ))}
                     </div>
                   </div>
+                )}
+                {scanResult.studentIdDebugSegmentBoxes && scanResult.studentIdDebugSegmentBoxes.length > 0 && (
+                  <details className="mt-3 text-xs">
+                    <summary className="cursor-pointer text-yellow-700 font-medium">Debug: segment boxes (pixel coords)</summary>
+                    <pre className="mt-1 p-2 bg-white rounded border overflow-auto max-h-32 text-gray-700">
+                      {JSON.stringify(scanResult.studentIdDebugSegmentBoxes.slice(0, 2), null, 2)}
+                      {scanResult.studentIdDebugSegmentBoxes.length > 2 ? `\n... +${scanResult.studentIdDebugSegmentBoxes.length - 2} more` : ''}
+                    </pre>
+                  </details>
                 )}
               </div>
             )}
