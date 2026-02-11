@@ -69,6 +69,9 @@ function AnswerSheetScanner() {
   const [cameraReady, setCameraReady] = useState(false);
   const [recognitionStatus, setRecognitionStatus] = useState<'idle' | 'searching' | 'ready' | 'captured'>('idle');
 
+  // Video stream dimensions (set when metadata loads) – used to fix aspect/rotation on mobile
+  const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
+
   // Detect if we're on a small/mobile screen (used for camera constraints)
   const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -251,10 +254,10 @@ function AnswerSheetScanner() {
     video.srcObject = stream;
 
     const handleLoadedMetadata = () => {
-      console.log('[Camera] Video metadata loaded', {
-        videoWidth: video.videoWidth,
-        videoHeight: video.videoHeight,
-      });
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      console.log('[Camera] Video metadata loaded', { videoWidth: w, videoHeight: h });
+      setVideoDimensions(w && h ? { width: w, height: h } : null);
       setCameraReady(true);
     };
 
@@ -311,45 +314,41 @@ function AnswerSheetScanner() {
         return;
       }
 
-      // Build video constraints optimized for phones vs desktop.
-      // Ask the browser for high-quality 16:9 (desktop) or 9:16 (mobile) video,
-      // and let it choose the best it supports within these bounds.
+      // Mobile: prefer portrait (height > width) so the feed fills the screen without crop/rotation.
+      // Desktop: 16:9 is fine.
       const videoConstraints: MediaTrackConstraints = isMobileViewport
         ? {
-            // Prefer back camera on phones
             facingMode: { ideal: 'environment' },
-            // Portrait-style 9:16 for phones
+            // Portrait: height > width so stream matches phone orientation
+            width: { ideal: 720, max: 1080 },
+            height: { ideal: 1280, max: 1920 },
             aspectRatio: { ideal: 9 / 16 },
-            // Reasonable HD+ range for mobile
-            width: { min: 720, ideal: 1080, max: 1440 },
-            height: { min: 1280, ideal: 1920, max: 2560 },
           }
         : {
-            // Prefer back / external camera on desktop
             facingMode: { ideal: 'environment' },
-            // Classic 16:9 for desktop
             aspectRatio: { ideal: 16 / 9 },
-            // Full HD to QHD range
             width: { min: 1280, ideal: 1920, max: 2560 },
             height: { min: 720, ideal: 1080, max: 1440 },
           };
 
-      console.log('[Camera] Requesting camera access via getUserMedia...', {
-        isMobileViewport,
-        videoConstraints,
-      });
+      console.log('[Camera] Requesting camera...', { isMobileViewport, videoConstraints });
 
-      // Always try to request camera access - browser will prompt if needed
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: videoConstraints,
-      });
+      let mediaStream: MediaStream;
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+      } catch (firstErr: any) {
+        if (firstErr?.name === 'OverconstrainedError' && isMobileViewport) {
+          console.log('[Camera] Portrait constraints failed, retrying with simple video: true');
+          mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        } else {
+          throw firstErr;
+        }
+      }
 
-      console.log('[Camera] getUserMedia succeeded, stream received', {
+      console.log('[Camera] getUserMedia succeeded', {
         trackCount: mediaStream.getTracks().length,
-        videoTracks: mediaStream.getVideoTracks().length
       });
 
-      // Success - permission granted
       setHasCameraPermission(true);
       setStream(mediaStream);
 
@@ -422,6 +421,7 @@ function AnswerSheetScanner() {
     }
     setCameraReady(false);
     setRecognitionStatus('idle');
+    setVideoDimensions(null);
     setCameraZoom(1);
     setCameraPan({ x: 0, y: 0 });
   };
@@ -1166,38 +1166,58 @@ function AnswerSheetScanner() {
                     : 'relative bg-gray-900 rounded-lg overflow-hidden'
                 }
               >
-                {/* 9:16 on phones (full area on mobile), 16:9 on desktop. Zoom wrapper for pinch + buttons. */}
-                <div
-                  ref={zoomWrapperRef}
-                  className={
-                    isMobileViewport
-                      ? 'relative flex-1 w-full min-h-0 overflow-hidden touch-none'
-                      : 'relative w-full aspect-[9/16] md:aspect-[16/9] overflow-hidden'
-                  }
-                  onTouchStart={onZoomWrapperTouchStart}
-                  onTouchMove={onZoomWrapperTouchMove}
-                  onTouchEnd={onZoomWrapperTouchEnd}
-                  style={{ touchAction: 'none' }}
-                >
-                  <div
-                    className="absolute inset-0 flex items-center justify-center origin-center transition-transform duration-100"
-                    style={{
-                      transform: `scale(${Math.max(1, Math.min(4, Number(cameraZoom) || 1))}) translate(${cameraPan.x}px, ${cameraPan.y}px)`,
-                    }}
-                  >
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      muted
+                {/* Preview area: on mobile, if stream is landscape we rotate -90° so full FOV fits portrait screen. */}
+                {(() => {
+                  const isLandscapeStream = videoDimensions && videoDimensions.width > videoDimensions.height;
+                  const rotateOnMobile = isMobileViewport && isLandscapeStream;
+                  const zoomScale = Math.max(1, Math.min(4, Number(cameraZoom) || 1));
+                  const zoomTransform = `scale(${zoomScale}) translate(${cameraPan.x}px, ${cameraPan.y}px)`;
+                  return (
+                    <div
+                      ref={zoomWrapperRef}
                       className={
                         isMobileViewport
-                          ? 'h-full w-full object-contain'
-                          : 'h-full w-full object-contain md:object-cover'
+                          ? 'relative flex-1 w-full min-h-0 overflow-hidden touch-none bg-black'
+                          : 'relative w-full aspect-[9/16] md:aspect-[16/9] overflow-hidden bg-black'
                       }
-                    />
-                  </div>
-                  <canvas ref={canvasRef} className="hidden" />
+                      onTouchStart={onZoomWrapperTouchStart}
+                      onTouchMove={onZoomWrapperTouchMove}
+                      onTouchEnd={onZoomWrapperTouchEnd}
+                      style={{ touchAction: 'none' }}
+                    >
+                      <div
+                        className="absolute inset-0 flex items-center justify-center origin-center transition-transform duration-100"
+                        style={{ transform: zoomTransform }}
+                      >
+                        {rotateOnMobile ? (
+                          <div
+                            className="flex items-center justify-center"
+                            style={{
+                              width: '100vh',
+                              height: '100vw',
+                              transform: 'rotate(-90deg)',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <video
+                              ref={videoRef}
+                              autoPlay
+                              playsInline
+                              muted
+                              className="h-full w-full object-contain bg-black"
+                            />
+                          </div>
+                        ) : (
+                          <video
+                            ref={videoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className="h-full w-full object-cover"
+                          />
+                        )}
+                      </div>
+                      <canvas ref={canvasRef} className="hidden" />
 
                   {/* Alignment overlay for answer sheet borders */}
                   <div className="pointer-events-none absolute inset-4 md:inset-8 flex items-center justify-center">
@@ -1248,6 +1268,8 @@ function AnswerSheetScanner() {
                     </button>
                   </div>
                 </div>
+                  );
+                })()}
 
                 <div
                   className={
