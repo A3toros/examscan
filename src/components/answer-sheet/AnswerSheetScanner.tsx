@@ -85,6 +85,7 @@ function AnswerSheetScanner() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraCaptureInputRef = useRef<HTMLInputElement>(null);
   const cameraContainerRef = useRef<HTMLDivElement>(null);
 
   // Check camera permission status & viewport on mount
@@ -553,12 +554,15 @@ function AnswerSheetScanner() {
         layoutConfig
       });
 
-      // Process the image with enhanced OCR
-      const ocrResult: OCRResult = await ocrService.processAnswerSheet(
-        imageData,
-        questionTypes,
-        layoutConfig
-      );
+      // Same pipeline as upload: one “photo” (this frame) → same OCR entry point
+      const ocrResult: OCRResult = selectedExam.student_info?.student_id
+        ? await ocrService.processAnswerSheetWithStudentID(
+            imageData,
+            questionTypes,
+            selectedExam.student_info.student_id_digits ?? 6,
+            layoutConfig
+          )
+        : await ocrService.processAnswerSheet(imageData, questionTypes, layoutConfig);
 
       console.log('[OCR] Result from live camera frame', {
         detectedBubblesCount: ocrResult.detectedBubbles?.length ?? 0,
@@ -1103,21 +1107,30 @@ function AnswerSheetScanner() {
             </h2>
             <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
               <Button
+                onClick={() => cameraCaptureInputRef.current?.click()}
+                disabled={isScanning}
+                className="w-full sm:w-auto bg-green-600 hover:bg-green-700"
+              >
+                <Camera size={20} className="mr-2" />
+                Take photo
+              </Button>
+              <Button
                 onClick={() => fileInputRef.current?.click()}
                 variant="outline"
                 disabled={isScanning}
                 className="w-full sm:w-auto"
               >
                 <Upload size={20} className="mr-2" />
-                Upload Image
+                Upload image
               </Button>
               <Button
                 onClick={startCamera}
                 disabled={isScanning || !!stream}
-                className="w-full sm:w-auto bg-green-600 hover:bg-green-700"
+                variant="outline"
+                className="w-full sm:w-auto"
               >
                 <Camera size={20} className="mr-2" />
-                Start Camera
+                Live camera
               </Button>
             </div>
           </div>
@@ -1126,6 +1139,14 @@ function AnswerSheetScanner() {
             ref={fileInputRef}
             type="file"
             accept="image/*"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+          <input
+            ref={cameraCaptureInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
             onChange={handleFileUpload}
             className="hidden"
           />
